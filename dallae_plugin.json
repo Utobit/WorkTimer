@@ -1,0 +1,9 @@
+{
+  "name": "WorkTimer",
+  "version": "1.0.0",
+  "description": "PC 작업 시간 자동 기록 타이머",
+  "cmd": "WorkTimer.exe",
+  "actions": ["run", "stop", "status"],
+  "data_dir": "%LOCALAPPDATA%\\LinaAI\\WorkTimer",
+  "data_file": "work_log.json"
+}

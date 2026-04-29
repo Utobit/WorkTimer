@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller build artifacts
+build/
+dist/
+build_*/
+dist_*/
+
+# MSIX staging (로컬 빌드 전용)
+msix_staging/
+*.msix
+*.msix.p7
+
+# 임시 파일
+POLISH_PLAN.md
+*_2026-*.txt
+
+# OS
+.DS_Store
+Thumbs.db
