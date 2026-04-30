@@ -8,7 +8,7 @@
   <Identity
     Name="UtobitWorkTimer"
     Publisher="CN=4BF7C5DE-0E2A-457D-A549-A5D4AF5B008E"
-    Version="1.0.2.0"
+    Version="1.0.1.0"
     ProcessorArchitecture="x64" />
 
   <Properties>

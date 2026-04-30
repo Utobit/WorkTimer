@@ -63,7 +63,7 @@ if (-not (Test-Path $CERT_PATH)) {
 }
 
 # 4. 서명
-& "$SDK\signtool.exe" sign /fd SHA256 /p7 . /p7co 1.2.840.113549.1.7.1 /p7ce DetachedSignedData /f $CERT_PATH /p $CERT_PASS $MSIX_OUT
+& "$SDK\signtool.exe" sign /fd SHA256 /f $CERT_PATH /p $CERT_PASS $MSIX_OUT
 Write-Host "서명 완료"
 
 # 구 스테이징 폴더 정리

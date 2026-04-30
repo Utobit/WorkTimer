@@ -6,258 +6,233 @@ import json
 import math
 import os
 import sys
-import threading
 import time
 import winreg
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
-from tkinter import (
-    BOTH, END, LEFT, RIGHT, TOP, BOTTOM, X, Y,
-    Canvas, Frame, Label, PhotoImage, Text, Tk, TclError,
-    colorchooser, filedialog, messagebox, StringVar, OptionMenu
+
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QLabel, QPushButton,
+    QVBoxLayout, QHBoxLayout, QFrame, QTextEdit, QDialog,
+    QSystemTrayIcon, QMenu, QFileDialog, QMessageBox,
+    QComboBox, QCheckBox, QSpinBox, QScrollArea, QSizePolicy,
+    QColorDialog, QGridLayout, QButtonGroup, QRadioButton,
+    QInputDialog
 )
-from tkinter import font as tkfont
-import tkinter as tk
-import tkinter.ttk as ttk
+from PyQt6.QtCore import (
+    Qt, QTimer, QPointF, QRectF, QSize, pyqtSignal
+)
+from PyQt6.QtGui import (
+    QPainter, QPen, QColor, QFont, QPixmap, QIcon, QCursor, QPainterPath
+)
 
-try:
-    import pystray
-    from PIL import Image, ImageDraw, ImageTk
-except Exception:
-    pystray = None
-    Image = None
-    ImageDraw = None
-    ImageTk = None
-
-
-APP_NAME = "WorkTimer"
-VERSION = "1.0.2"
+# ── 상수 ────────────────────────────────────────────────
+APP_NAME      = "WorkTimer"
+VERSION       = "1.0.1"
 IDLE_GRACE_SECONDS = 10 * 60
-POLL_SECONDS = 5
-APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
+POLL_SECONDS  = 5
+APP_DIR       = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+RESOURCE_DIR  = Path(getattr(sys, "_MEIPASS", APP_DIR))
 LOCAL_APPDATA = Path(os.environ.get("LOCALAPPDATA", APP_DIR))
-DATA_DIR = LOCAL_APPDATA / "LinaAI" / APP_NAME
-DATA_FILE = DATA_DIR / "work_log.json"
+DATA_DIR      = LOCAL_APPDATA / "LinaAI" / APP_NAME
+DATA_FILE     = DATA_DIR / "work_log.json"
 CHECKPOINT_FILE = DATA_DIR / "checkpoint.json"
-BACKUP_DIR = DATA_DIR / "backups"
+BACKUP_DIR    = DATA_DIR / "backups"
 LEGACY_DATA_FILE = APP_DIR / "data" / "work_log.json"
-ICON_FILE = RESOURCE_DIR / "icon.png"
-ICONS_DIR = RESOURCE_DIR / "icons"
+ICON_FILE     = RESOURCE_DIR / "icon.png"
 SETTINGS_FILE = DATA_DIR / "settings.json"
-REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-APP_REG_NAME = "UtobitWorkTimer"
+REG_RUN_KEY   = r"Software\Microsoft\Windows\CurrentVersion\Run"
+APP_REG_NAME  = "UtobitWorkTimer"
+MUTEX_NAME    = "UtobitWorkTimer_SingleInstance"
 
-PALETTE_LIGHT: dict[str, str] = {
-    "bg": "#f8fafc",       "panel": "#ffffff",    "line": "#e2e8f0",
-    "text": "#1e293b",     "muted": "#64748b",    "clock": "#eff6ff",
-    "clock_line": "#bfdbfe", "active": "#1d4ed8", "active_dark": "#1e40af",
-    "center": "#2563eb",   "today": "#fefce8",    "btn_bg": "#f1f5f9",
-    "btn_bg_hover": "#e2e8f0", "btn_fg": "#334155", "btn_border": "#cbd5e1",
-    "btn_dark_bg": "#3b82f6", "btn_dark_fg": "#ffffff", "btn_dark_hover": "#2563eb",
+PALETTE_LIGHT = {
+    "bg": "#f8fafc",        "panel": "#ffffff",      "line": "#e2e8f0",
+    "text": "#1e293b",      "muted": "#64748b",       "clock": "#eff6ff",
+    "clock_line": "#93c5fd","active": "#1d4ed8",      "active_dark": "#1e40af",
+    "center": "#2563eb",    "today_border": "#f59e0b",
+    "btn_bg": "#f1f5f9",    "btn_hover": "#e2e8f0",   "btn_fg": "#334155",
+    "btn_border": "#cbd5e1","btn_dark": "#3b82f6",    "btn_dark_fg": "#ffffff",
+    "btn_dark_hover": "#2563eb", "merged_bg": "#dbeafe",
+    "range_bg": "#fef3c7",  "range_border": "#f59e0b",
 }
-PALETTE_DARK: dict[str, str] = {
-    "bg": "#0f172a",       "panel": "#1e293b",    "line": "#334155",
-    "text": "#f1f5f9",     "muted": "#94a3b8",    "clock": "#172554",
-    "clock_line": "#1d4ed8", "active": "#3b82f6", "active_dark": "#2563eb",
-    "center": "#60a5fa",   "today": "#1c1917",    "btn_bg": "#1e293b",
-    "btn_bg_hover": "#334155", "btn_fg": "#cbd5e1", "btn_border": "#475569",
-    "btn_dark_bg": "#3b82f6", "btn_dark_fg": "#ffffff", "btn_dark_hover": "#2563eb",
+PALETTE_DARK = {
+    "bg": "#0f172a",        "panel": "#1e293b",       "line": "#334155",
+    "text": "#f1f5f9",      "muted": "#94a3b8",       "clock": "#172554",
+    "clock_line": "#1d4ed8","active": "#3b82f6",       "active_dark": "#2563eb",
+    "center": "#60a5fa",    "today_border": "#f59e0b",
+    "btn_bg": "#1e293b",    "btn_hover": "#334155",    "btn_fg": "#cbd5e1",
+    "btn_border": "#475569","btn_dark": "#3b82f6",     "btn_dark_fg": "#ffffff",
+    "btn_dark_hover": "#2563eb", "merged_bg": "#1e3a5f",
+    "range_bg": "#3b2f0a",  "range_border": "#f59e0b",
 }
-PALETTE: dict[str, str] = dict(PALETTE_LIGHT)
+P = dict(PALETTE_LIGHT)
+
+def pc(key: str) -> QColor:
+    return QColor(P[key])
+
+# ── 아이콘 ──────────────────────────────────────────────
+ICON_FILES = ["icon_1.png", "icon_2.png", "icon_3.png", "icon_4.ico", "icon_5.png"]
+ICON_NAMES = ["그린", "블루", "핑크", "클래식", "캐릭터"]
+
+_icon_search = [
+    RESOURCE_DIR / "icons",
+    Path(__file__).resolve().parent / "icons",
+]
+ICONS_DIR: Path | None = next((p for p in _icon_search if p.exists()), None)
+
+def load_icon(idx: int) -> QIcon:
+    if ICONS_DIR:
+        f = ICONS_DIR / ICON_FILES[idx % len(ICON_FILES)]
+        if f.exists():
+            return QIcon(str(f))
+    colors = ["#16a34a", "#2563eb", "#db2777", "#334155", "#94a3b8"]
+    c = colors[idx % len(colors)]
+    pix = QPixmap(64, 64)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(c))
+    p.drawEllipse(2, 2, 60, 60)
+    p.end()
+    return QIcon(pix)
+
+def load_icon_any(idx: int, custom_icons: "list[str]") -> QIcon:
+    n = len(ICON_FILES)
+    if idx >= n and custom_icons:
+        ci = idx - n
+        if ci < len(custom_icons):
+            p = Path(custom_icons[ci])
+            if p.exists():
+                return QIcon(str(p))
+    return load_icon(min(idx, n - 1))
+
+def generate_icon(color_idx: int, size: int = 64) -> QIcon:
+    return load_icon(color_idx)
+
+def clip_icon_circle(icon: QIcon, size: int = 44) -> QIcon:
+    """아이콘 → 짧은 쪽 기준 정사각형 센터크롭 → 원형 클리핑."""
+    # 자연 비율 유지를 위해 큰 크기로 요청 (Qt가 aspect ratio 보존)
+    raw = icon.pixmap(QSize(512, 512))
+    if raw.isNull():
+        raw = icon.pixmap(QSize(size, size))
+    sw, sh = raw.width(), raw.height()
+    # 짧은 쪽 기준 정사각형 센터크롭
+    dim = min(sw, sh)
+    ox, oy = (sw - dim) // 2, (sh - dim) // 2
+    if ox or oy:
+        raw = raw.copy(ox, oy, dim, dim)
+    scaled = raw.scaled(size, size,
+                        Qt.AspectRatioMode.IgnoreAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation)
+    result = QPixmap(size, size)
+    result.fill(Qt.GlobalColor.transparent)
+    p = QPainter(result)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path = QPainterPath()
+    path.addEllipse(QRectF(0, 0, size, size))
+    p.setClipPath(path)
+    p.drawPixmap(0, 0, scaled)
+    p.end()
+    return QIcon(result)
 
 # ── 다국어 ──────────────────────────────────────────────
-ICON_NAMES_KO = {"icon_1": "아이콘 1", "icon_2": "아이콘 2", "icon_3": "아이콘 3", "icon_4": "아이콘 4", "icon_5": "아이콘 5"}
-ICON_NAMES_EN = {"icon_1": "Icon 1", "icon_2": "Icon 2", "icon_3": "Icon 3", "icon_4": "Icon 4", "icon_5": "Icon 5"}
-
 LANG_KO = {
     "prev": "‹", "today": "오늘", "next": "›",
     "export": "기록 내보내기", "settings": "설정",
     "year_view": "연간 보기", "month_view": "월간",
-    "back": "← 월간",
     "total_month": "이번 달 총 작업시간",
-    "total_day": "전체 작업시간",
     "total": "총 작업시간",
     "intervals": "기록 구간",
     "no_record": "아직 기록이 없습니다.",
-    "memo": "메모",
-    "memo_save": "저장",
-    "export_title": "기록 내보내기",
-    "export_format": "형식 선택",
+    "memo": "메모", "memo_save": "저장",
+    "export_title": "기록 내보내기", "export_format": "형식 선택",
     "fmt_simple": "간단 (날짜·시간)",
     "fmt_table": "표 형식 (Notion/Docs)",
     "fmt_detail": "상세 (구간 포함)",
-    "export_done": "내보내기 완료",
-    "export_saved": "저장 완료:\n{}",
-    "export_err": "오류",
-    "reset_title": "데이터 초기화",
+    "export_done": "내보내기 완료", "export_saved": "저장 완료:\n{}",
+    "export_err": "오류", "reset_title": "데이터 초기화",
     "reset_confirm": "모든 작업 기록이 삭제됩니다.\n정말 초기화하시겠습니까?",
-    "reset_done": "초기화 완료",
-    "settings_title": "설정",
-    "lang_label": "언어",
-    "idle_label": "유휴 감지 시간 (분)",
-    "data_path": "데이터 폴더 열기",
-    "reset_btn": "데이터 초기화",
+    "reset_done": "초기화 완료", "settings_title": "설정",
+    "lang_label": "언어", "idle_label": "유휴 감지 시간 (분)",
+    "data_path": "데이터 폴더 열기", "reset_btn": "데이터 초기화",
     "weekdays": ["일", "월", "화", "수", "목", "금", "토"],
     "made_by": "Made by Jin (AI Agent) · Utobit",
     "year": "년", "month_unit": "월", "day_unit": "일",
     "weekday_names": ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"],
-    "export_header": "WorkTimer 작업 기록",
-    "export_time": "내보내기:",
+    "export_header": "WorkTimer 작업 기록", "export_time": "내보내기:",
     "no_data": "기록 없음",
     "table_date": "날짜", "table_wd": "요일", "table_time": "작업시간", "table_note": "메모",
     "autostart": "시작 시 자동 실행",
-    "icon_label": "앱 아이콘",
-    "icon_pick_btn": "아이콘 변경",
-    "icon_picker_title": "앱 아이콘 선택",
-    "icon_picker_desc": "앱의 아이콘 색상을 선택하세요.",
-    "icon_names": ICON_NAMES_KO,
-    "color_section": "색상 설정",
-    "color_active": "활동 구간 색상",
-    "color_clock_bg": "시계 배경 색상",
-    "color_center": "중앙점 색상",
+    "theme_label": "테마", "theme_light": "라이트", "theme_dark": "다크",
+    "expand_btn": "펼치기", "collapse_btn": "접기",
+    "color_active": "활동 색상", "color_clock_bg": "시계 배경", "color_center": "중앙점",
     "color_reset": "기본값으로 초기화",
     "export_range": "기간",
-    "theme_label": "테마",
-    "theme_light": "라이트",
-    "theme_dark": "다크",
-    "expand_btn": "펼치기",
-    "collapse_btn": "접기",
+    "icon_label": "아이콘",
+    "range_label_prompt": "날짜 묶음 이름 (빈칸이면 취소):",
+    "total_label": "총 작업시간",
+    "recording_now": "지금 기록중",
+    "clock_bg_label": "시계 배경 이미지",
+    "clock_bg_pick": "선택",
+    "clock_bg_clear": "지우기",
+    "clock_bg_none": "없음",
+    "icon_add": "+ 추가",
+    "month_names": None,
 }
-
 LANG_EN = {
     "prev": "‹", "today": "Today", "next": "›",
     "export": "Export", "settings": "Settings",
     "year_view": "Year View", "month_view": "Month",
-    "back": "← Month",
-    "total_month": "Monthly total",
-    "total_day": "Work time",
-    "total": "Total",
-    "intervals": "Sessions",
-    "no_record": "No records yet.",
-    "memo": "Memo",
-    "memo_save": "Save",
-    "export_title": "Export Records",
-    "export_format": "Select format",
-    "fmt_simple": "Simple (date·time)",
-    "fmt_table": "Table (Notion/Docs)",
+    "total_month": "Monthly total", "total": "Total",
+    "intervals": "Sessions", "no_record": "No records yet.",
+    "memo": "Memo", "memo_save": "Save",
+    "export_title": "Export Records", "export_format": "Select format",
+    "fmt_simple": "Simple (date·time)", "fmt_table": "Table (Notion/Docs)",
     "fmt_detail": "Detail (with sessions)",
-    "export_done": "Export Done",
-    "export_saved": "Saved:\n{}",
-    "export_err": "Error",
-    "reset_title": "Reset Data",
+    "export_done": "Export Done", "export_saved": "Saved:\n{}",
+    "export_err": "Error", "reset_title": "Reset Data",
     "reset_confirm": "All work records will be deleted.\nAre you sure?",
-    "reset_done": "Reset complete",
-    "settings_title": "Settings",
-    "lang_label": "Language",
-    "idle_label": "Idle threshold (min)",
-    "data_path": "Open data folder",
-    "reset_btn": "Reset all data",
+    "reset_done": "Reset complete", "settings_title": "Settings",
+    "lang_label": "Language", "idle_label": "Idle threshold (min)",
+    "data_path": "Open data folder", "reset_btn": "Reset all data",
     "weekdays": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
     "made_by": "Made by Jin (AI Agent) · Utobit",
     "year": "", "month_unit": "", "day_unit": "",
     "weekday_names": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-    "export_header": "WorkTimer Records",
-    "export_time": "Exported:",
+    "export_header": "WorkTimer Records", "export_time": "Exported:",
     "no_data": "No records",
     "table_date": "Date", "table_wd": "Day", "table_time": "Hours", "table_note": "Memo",
     "autostart": "Run at startup",
-    "icon_label": "App icon",
-    "icon_pick_btn": "Change icon",
-    "icon_picker_title": "Choose App Icon",
-    "icon_picker_desc": "Select the icon color for the app.",
-    "icon_names": ICON_NAMES_EN,
-    "color_section": "Color Settings",
-    "color_active": "Active interval color",
-    "color_clock_bg": "Clock background",
-    "color_center": "Center dot color",
+    "theme_label": "Theme", "theme_light": "Light", "theme_dark": "Dark",
+    "expand_btn": "Expand", "collapse_btn": "Collapse",
+    "color_active": "Active", "color_clock_bg": "Clock BG", "color_center": "Center",
     "color_reset": "Reset to defaults",
     "export_range": "Period",
-    "theme_label": "Theme",
-    "theme_light": "Light",
-    "theme_dark": "Dark",
-    "expand_btn": "Expand",
-    "collapse_btn": "Collapse",
+    "icon_label": "Icon",
+    "range_label_prompt": "Range name (empty to cancel):",
+    "total_label": "Total",
+    "recording_now": "Recording...",
+    "clock_bg_label": "Clock Background Image",
+    "clock_bg_pick": "Pick",
+    "clock_bg_clear": "Clear",
+    "clock_bg_none": "None",
+    "icon_add": "+ Add",
+    "month_names": ["January", "February", "March", "April", "May", "June",
+                    "July", "August", "September", "October", "November", "December"],
 }
-
 LANGUAGES = {"한국어": LANG_KO, "English": LANG_EN}
-
-ICON_STYLES: dict[str, dict[str, tuple]] = {
-    "blue":   {"bg": (224,242,254,255), "outline": (2,132,199,255),   "active": (253,186,116,255), "hand": (31,41,55,255)},
-    "dark":   {"bg": (30, 64,175,255),  "outline": (147,197,253,255), "active": (251,191, 36,255), "hand": (255,255,255,255)},
-    "green":  {"bg": (209,250,229,255), "outline": (5,150,105,255),   "active": (52,211,153,255),  "hand": (31,41,55,255)},
-    "purple": {"bg": (237,233,254,255), "outline": (124,58,237,255),  "active": (196,181,253,255), "hand": (31,41,55,255)},
-    "warm":   {"bg": (255,237,213,255), "outline": (234,88, 12,255),  "active": (253,186,116,255), "hand": (31,41,55,255)},
-}
-
-
-# ── 설정 파일 ───────────────────────────────────────────
-def load_settings() -> dict:
-    try:
-        if SETTINGS_FILE.exists():
-            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {}
-
-
-def save_settings(settings: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def set_autostart(enable: bool) -> None:
-    if not getattr(sys, "frozen", False):
-        return
-    exe = f'"{sys.executable}"'
-    try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_SET_VALUE)
-        if enable:
-            winreg.SetValueEx(key, APP_REG_NAME, 0, winreg.REG_SZ, exe)
-        else:
-            try:
-                winreg.DeleteValue(key, APP_REG_NAME)
-            except FileNotFoundError:
-                pass
-        winreg.CloseKey(key)
-    except Exception:
-        pass
-
-
-def get_autostart() -> bool:
-    try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_READ)
-        winreg.QueryValueEx(key, APP_REG_NAME)
-        winreg.CloseKey(key)
-        return True
-    except (FileNotFoundError, OSError):
-        return False
-
-
-def _rgba_to_hex(rgba: tuple) -> str:
-    return "#{:02x}{:02x}{:02x}".format(*rgba[:3])
-
-
-def get_icon_files() -> list[Path]:
-    if not ICONS_DIR.exists():
-        return []
-    files = list(ICONS_DIR.glob("*.png")) + list(ICONS_DIR.glob("*.ico"))
-    return sorted(files, key=lambda p: p.name)
-
 
 # ── 유틸 ────────────────────────────────────────────────
 class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
 
-
-_user32 = ctypes.windll.user32
+_user32   = ctypes.windll.user32
 _kernel32 = ctypes.windll.kernel32
-
 
 def now_local() -> datetime:
     return datetime.now().replace(microsecond=0)
-
 
 def get_idle_seconds() -> float:
     info = LASTINPUTINFO()
@@ -266,19 +241,15 @@ def get_idle_seconds() -> float:
         return 0.0
     return max(0.0, (_kernel32.GetTickCount64() - info.dwTime) / 1000.0)
 
+def date_key(d: date) -> str:
+    return d.isoformat()
 
-def date_key(value: date) -> str:
-    return value.isoformat()
+def seconds_from_midnight(dt: datetime) -> int:
+    return dt.hour * 3600 + dt.minute * 60 + dt.second
 
-
-def seconds_from_midnight(value: datetime) -> int:
-    return value.hour * 3600 + value.minute * 60 + value.second
-
-
-def seconds_to_hhmm(seconds: int) -> str:
-    seconds = max(0, int(seconds))
-    return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}"
-
+def seconds_to_hhmm(s: int) -> str:
+    s = max(0, int(s))
+    return f"{s // 3600:02d}:{(s % 3600) // 60:02d}"
 
 def split_interval_by_day(start: datetime, end: datetime) -> list[tuple[str, int, int]]:
     if end <= start:
@@ -287,14 +258,13 @@ def split_interval_by_day(start: datetime, end: datetime) -> list[tuple[str, int
     cursor = start
     while cursor.date() < end.date():
         midnight = datetime.combine(cursor.date() + timedelta(days=1), dt_time.min)
-        pieces.append((date_key(cursor.date()), seconds_from_midnight(cursor), 24 * 3600))
+        pieces.append((date_key(cursor.date()), seconds_from_midnight(cursor), 86400))
         cursor = midnight
     pieces.append((date_key(cursor.date()), seconds_from_midnight(cursor), seconds_from_midnight(end)))
     return [(d, s, e) for d, s, e in pieces if e > s]
 
-
 def merge_intervals(intervals: list[list[int]]) -> list[list[int]]:
-    clean = sorted((max(0, int(s)), min(24 * 3600, int(e))) for s, e in intervals if e > s)
+    clean = sorted((max(0, int(s)), min(86400, int(e))) for s, e in intervals if e > s)
     if not clean:
         return []
     merged: list[list[int]] = [[clean[0][0], clean[0][1]]]
@@ -306,78 +276,42 @@ def merge_intervals(intervals: list[list[int]]) -> list[list[int]]:
             merged.append([start, end])
     return merged
 
+# ── 설정 ────────────────────────────────────────────────
+def load_settings() -> dict:
+    try:
+        if SETTINGS_FILE.exists():
+            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
 
-# ── 커스텀 버튼 ─────────────────────────────────────────
-class RoundedButton(Canvas):
-    def __init__(self, parent, text, command=None, width=100, height=30,
-                 radius=14, dark=False, ghost=False, font_size=9, **kwargs):
-        bg = parent.cget("bg") if hasattr(parent, "cget") else PALETTE["bg"]
-        super().__init__(parent, width=width, height=height,
-                         bg=bg, highlightthickness=0, cursor="hand2")
-        self._text = text
-        self._command = command
-        self._r = min(radius, height // 2, width // 2)
-        self._width = width
-        self._height = height
-        self._dark = dark
-        self._ghost = ghost
-        self._font_size = font_size
-        self._hover = False
-        self._parent_bg = bg
-        self._draw()
-        self.bind("<Button-1>", self._click)
-        self.bind("<Enter>", lambda e: self._set_hover(True))
-        self.bind("<Leave>", lambda e: self._set_hover(False))
+def save_settings(s: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SETTINGS_FILE.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _set_hover(self, val: bool) -> None:
-        self._hover = val
-        self._draw()
-
-    def _draw(self) -> None:
-        self.delete("all")
-        w, h, r = self._width, self._height, self._r
-
-        if self._dark:
-            fill = PALETTE["btn_dark_hover"] if self._hover else PALETTE["btn_dark_bg"]
-            fg = PALETTE["btn_dark_fg"]
-            border_w = 0
-            border_c = fill
-        elif self._ghost:
-            fill = PALETTE["btn_bg_hover"] if self._hover else self._parent_bg
-            fg = PALETTE["btn_fg"]
-            border_w = 1
-            border_c = PALETTE["btn_border"]
+def set_autostart(enable: bool) -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    exe = f'"{sys.executable}"'
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_SET_VALUE)
+        if enable:
+            winreg.SetValueEx(key, APP_REG_NAME, 0, winreg.REG_SZ, exe)
         else:
-            fill = PALETTE["btn_bg_hover"] if self._hover else PALETTE["btn_bg"]
-            fg = PALETTE["btn_fg"]
-            border_w = 1
-            border_c = PALETTE["btn_border"]
+            try: winreg.DeleteValue(key, APP_REG_NAME)
+            except FileNotFoundError: pass
+        winreg.CloseKey(key)
+    except Exception:
+        pass
 
-        # smooth=True polygon → 진짜 둥근 사각형
-        pts = [
-            r, 0,   w - r, 0,
-            w, 0,   w, r,
-            w, h - r, w, h,
-            w - r, h, r, h,
-            0, h,   0, h - r,
-            0, r,   0, 0,
-            r, 0,
-        ]
-        self.create_polygon(pts, smooth=True,
-                            fill=fill, outline=border_c, width=border_w)
-        self.create_text(w // 2, h // 2, text=self._text, fill=fg,
-                         font=("Segoe UI", self._font_size))
-
-    def configure(self, **kwargs):
-        if "text" in kwargs:
-            self._text = kwargs.pop("text")
-            self._draw()
-        super().configure(**kwargs)
-
-    def _click(self, _event) -> None:
-        if self._command:
-            self._command()
-
+def get_autostart() -> bool:
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_READ)
+        winreg.QueryValueEx(key, APP_REG_NAME)
+        winreg.CloseKey(key)
+        return True
+    except (FileNotFoundError, OSError):
+        return False
 
 # ── 데이터 ──────────────────────────────────────────────
 def prepare_data_storage() -> None:
@@ -386,12 +320,8 @@ def prepare_data_storage() -> None:
     if not DATA_FILE.exists() and LEGACY_DATA_FILE.exists():
         try:
             DATA_FILE.write_text(LEGACY_DATA_FILE.read_text(encoding="utf-8"), encoding="utf-8")
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            (BACKUP_DIR / f"migrated-{stamp}.json").write_text(
-                DATA_FILE.read_text(encoding="utf-8"), encoding="utf-8")
         except Exception:
             pass
-
 
 def backup_data_file(reason: str = "auto") -> None:
     if not DATA_FILE.exists():
@@ -405,13 +335,12 @@ def backup_data_file(reason: str = "auto") -> None:
     except Exception:
         pass
 
-
 @dataclass
 class WorkLog:
     days: dict[str, list[list[int]]]
     notes: dict[str, str]
-    merges: dict[str, list[list[int]]]  # date_key → [[gap_start, gap_end], ...]
-    ranges: list[dict]                  # [{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","label":"..."}]
+    merges: dict[str, list[list[int]]]
+    ranges: list[dict]
 
     @classmethod
     def load(cls) -> "WorkLog":
@@ -421,24 +350,17 @@ class WorkLog:
         try:
             payload = json.loads(DATA_FILE.read_text(encoding="utf-8"))
             days = payload.get("days", {})
-            if not isinstance(days, dict):
-                return cls(days={}, notes={}, merges={}, ranges=[])
             parsed: dict[str, list[list[int]]] = {}
             for key, value in days.items():
                 if isinstance(value, list):
                     parsed[key] = merge_intervals(value)
             notes = payload.get("notes", {})
-            if not isinstance(notes, dict):
-                notes = {}
+            if not isinstance(notes, dict): notes = {}
             merges_raw = payload.get("merges", {})
-            merges: dict[str, list[list[int]]] = (
-                {k: v for k, v in merges_raw.items() if isinstance(v, list)}
-                if isinstance(merges_raw, dict) else {}
-            )
-            ranges_raw = payload.get("ranges", [])
-            ranges = ranges_raw if isinstance(ranges_raw, list) else []
+            merges = {k: v for k, v in merges_raw.items() if isinstance(v, list)} if isinstance(merges_raw, dict) else {}
+            ranges = payload.get("ranges", [])
             return cls(days=parsed, notes={str(k): str(v) for k, v in notes.items()},
-                       merges=merges, ranges=ranges)
+                       merges=merges, ranges=ranges if isinstance(ranges, list) else [])
         except Exception:
             backup = DATA_FILE.with_suffix(f".broken-{int(time.time())}.json")
             DATA_FILE.replace(backup)
@@ -449,13 +371,9 @@ class WorkLog:
         if DATA_FILE.exists():
             backup_data_file("before-save")
         payload = {
-            "schema": 1,
-            "updated_at": now_local().isoformat(),
-            "idle_grace_seconds": IDLE_GRACE_SECONDS,
-            "days": self.days,
-            "notes": self.notes,
-            "merges": self.merges,
-            "ranges": self.ranges,
+            "schema": 1, "updated_at": now_local().isoformat(),
+            "days": self.days, "notes": self.notes,
+            "merges": self.merges, "ranges": self.ranges,
         }
         tmp = DATA_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -484,18 +402,14 @@ class WorkLog:
     def set_note_for(self, day: date, note: str) -> None:
         key = date_key(day)
         note = note.strip()
-        if note:
-            self.notes[key] = note
-        else:
-            self.notes.pop(key, None)
+        if note: self.notes[key] = note
+        else: self.notes.pop(key, None)
         self.save()
 
     def reset(self) -> None:
         backup_data_file("before-reset")
-        self.days.clear()
-        self.notes.clear()
-        self.merges.clear()
-        self.ranges.clear()
+        self.days.clear(); self.notes.clear()
+        self.merges.clear(); self.ranges.clear()
         self.save()
 
     def merges_for(self, day: date) -> list[list[int]]:
@@ -511,10 +425,8 @@ class WorkLog:
 
     def remove_merge(self, day: date, gap_start: int, gap_end: int) -> None:
         key = date_key(day)
-        self.merges[key] = [g for g in self.merges.get(key, [])
-                             if g != [gap_start, gap_end]]
-        if not self.merges.get(key):
-            self.merges.pop(key, None)
+        self.merges[key] = [g for g in self.merges.get(key, []) if g != [gap_start, gap_end]]
+        if not self.merges.get(key): self.merges.pop(key, None)
         self.save()
 
     def ranges_for_month(self, year: int, month: int) -> list[dict]:
@@ -523,105 +435,71 @@ class WorkLog:
         result = []
         for r in self.ranges:
             try:
-                rs = date.fromisoformat(r["start"])
-                re = date.fromisoformat(r["end"])
+                rs = date.fromisoformat(r["start"]); re = date.fromisoformat(r["end"])
                 if rs <= last and re >= first:
                     result.append({**r, "start_date": rs, "end_date": re})
-            except Exception:
-                pass
+            except Exception: pass
         return result
 
     def add_range(self, start: date, end: date, label: str) -> None:
-        self.ranges.append({"start": start.isoformat(), "end": end.isoformat(),
-                             "label": label})
+        self.ranges.append({"start": start.isoformat(), "end": end.isoformat(), "label": label})
         self.save()
 
-    def remove_range(self, start: date, end: date) -> None:
-        self.ranges = [r for r in self.ranges
-                       if not (r.get("start") == start.isoformat()
-                               and r.get("end") == end.isoformat())]
-        self.save()
-
+    def remove_range_containing(self, d: date) -> bool:
+        before = len(self.ranges)
+        self.ranges = [
+            r for r in self.ranges
+            if not (date.fromisoformat(r["start"]) <= d <= date.fromisoformat(r["end"]))
+        ]
+        if len(self.ranges) < before:
+            self.save(); return True
+        return False
 
 # ── 트래커 ──────────────────────────────────────────────
 class ActivityTracker:
-    def __init__(self, log: WorkLog, on_change,
-                 recovered_start: "datetime | None" = None) -> None:
+    def __init__(self, log: WorkLog, on_change, recovered_start: "datetime | None" = None) -> None:
         self.log = log
         self.on_change = on_change
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
         self._active_start: datetime | None = recovered_start
-        self._recorded_until: datetime | None = None
         self._last_activity_at: datetime | None = recovered_start
         self._last_checkpoint_write: datetime | None = None
 
     def _write_checkpoint(self) -> None:
-        if self._active_start is None:
-            return
+        if self._active_start is None: return
         try:
             CHECKPOINT_FILE.write_text(
-                json.dumps({"active_start": self._active_start.isoformat()},
-                           ensure_ascii=False),
-                encoding="utf-8")
-        except Exception:
-            pass
+                json.dumps({"active_start": self._active_start.isoformat()}), encoding="utf-8")
+        except Exception: pass
 
     def _clear_checkpoint(self) -> None:
-        try:
-            CHECKPOINT_FILE.unlink(missing_ok=True)
-        except Exception:
-            pass
+        try: CHECKPOINT_FILE.unlink(missing_ok=True)
+        except Exception: pass
 
     @staticmethod
     def recover_from_checkpoint(log: WorkLog) -> "datetime | None":
-        """체크포인트에서 active_start를 복구해 반환. 자정 경계를 넘은 경우 어제분만 커밋."""
-        if not CHECKPOINT_FILE.exists():
-            return None
+        if not CHECKPOINT_FILE.exists(): return None
         try:
             data = json.loads(CHECKPOINT_FILE.read_text(encoding="utf-8"))
-            start_str = data.get("active_start")
-            if not start_str:
-                return None
-            active_start = datetime.fromisoformat(start_str)
+            active_start = datetime.fromisoformat(data.get("active_start", ""))
             today = now_local().date()
             if active_start.date() < today:
-                # 자정을 넘긴 경우 — 어제분만 커밋, 오늘은 트래커가 새로 시작
-                midnight = datetime.combine(today, dt_time.min)
-                log.add_interval(active_start, midnight)
+                log.add_interval(active_start, datetime.combine(today, dt_time.min))
                 return None
-            return active_start  # 오늘 세션 → 트래커에서 이어서 기록
-        except Exception:
-            return None
+            return active_start
+        except Exception: return None
         finally:
-            try:
-                CHECKPOINT_FILE.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._thread = threading.Thread(target=self._loop, name="worktimer-activity", daemon=True)
-        self._thread.start()
+            try: CHECKPOINT_FILE.unlink(missing_ok=True)
+            except Exception: pass
 
     def stop(self) -> None:
-        self._stop.set()
         if self._active_start is not None:
             self.log.add_interval(self._active_start, now_local())
-            self.on_change()
         self._clear_checkpoint()
 
     @property
     def current_interval(self) -> tuple[datetime, datetime] | None:
-        if self._active_start is None:
-            return None
+        if self._active_start is None: return None
         return (self._active_start, now_local())
-
-    def _loop(self) -> None:
-        while not self._stop.is_set():
-            self._tick()
-            self._stop.wait(POLL_SECONDS)
 
     def _tick(self) -> None:
         current = now_local()
@@ -632,15 +510,11 @@ class ActivityTracker:
             last_input = current - timedelta(seconds=idle)
             if self._active_start is None:
                 self._active_start = last_input
-                self._recorded_until = None
             elif self._active_start.date() < current.date():
-                # 자정 경계: 어제까지 저장, 오늘은 current(오늘 날짜 확정)로 재시작
                 midnight = datetime.combine(current.date(), dt_time.min)
                 self.log.add_interval(self._active_start, midnight)
                 self._active_start = current
-                self._recorded_until = None
                 self._clear_checkpoint()
-            # 60초마다 현재 구간을 체크포인트로 저장 (강제 종료 시 복구용)
             if (self._last_checkpoint_write is None or
                     (current - self._last_checkpoint_write).total_seconds() >= 60):
                 self._write_checkpoint()
@@ -650,1575 +524,1574 @@ class ActivityTracker:
             return
 
         if self._active_start is not None:
-            # Always resolve midnight crossing, even while idle
             if self._active_start.date() < current.date():
                 midnight = datetime.combine(current.date(), dt_time.min)
                 self.log.add_interval(self._active_start, midnight)
-                self._active_start = None
-                self._recorded_until = None
-                self._last_activity_at = None
-                self._clear_checkpoint()
-                self.on_change()
-                return
+                self._active_start = None; self._last_activity_at = None
+                self._clear_checkpoint(); self.on_change(); return
             if self._last_activity_at is not None:
                 grace_end = self._last_activity_at + timedelta(seconds=IDLE_GRACE_SECONDS)
                 if current >= grace_end:
                     self.log.add_interval(self._active_start, self._last_activity_at)
-                    self.on_change()
-                    self._active_start = None
-                    self._recorded_until = None
-                    self._last_activity_at = None
-                    self._clear_checkpoint()
+                    self._active_start = None; self._last_activity_at = None
+                    self._clear_checkpoint(); self.on_change()
 
+# ── 우측 패널 (일간 뷰) ─────────────────────────────────
+class RightPanel(QScrollArea):
+    unmerge_requested = pyqtSignal(date, int, int)
+    save_memo_requested = pyqtSignal(date, str)
 
-# ── 메인 앱 ─────────────────────────────────────────────
-class WorkTimerApp:
-    def __init__(self, start_minimized: bool = False) -> None:
-        self.log = WorkLog.load()
-        _recovered_start = ActivityTracker.recover_from_checkpoint(self.log)
-        self._settings = load_settings()
-        self._lang_name = self._settings.get("lang", "한국어")
-        self._L = LANGUAGES.get(self._lang_name, LANG_KO)
-        self._icon_style = self._settings.get("icon_style", "")
-        self._start_minimized = start_minimized
-        self._first_launch = not self._settings.get("icon_style")
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._content = QWidget()
+        self._content.setObjectName("right_panel_content")
+        self.setWidget(self._content)
+        self._layout = QVBoxLayout(self._content)
+        self._layout.setContentsMargins(14, 10, 14, 16)
+        self._layout.setSpacing(0)
+        self._memo_edit: QTextEdit | None = None
+        self._current_day: date | None = None
+        self._apply_style()
 
-        # Apply custom palette colors from settings
-        for skey, pkey in [("color_active", "active"), ("color_clock_bg", "clock"),
-                            ("color_center", "center")]:
-            val = self._settings.get(skey, "")
-            if val and len(val) == 7 and val.startswith("#"):
-                PALETTE[pkey] = val
+    def _apply_style(self) -> None:
+        bg = P["bg"]; panel = P["panel"]; text = P["text"]; line = P["line"]
+        self.setStyleSheet(f"""
+            QScrollArea, QWidget#right_panel_content {{ background: {bg}; border: none; }}
+            QLabel {{ background: transparent; }}
+            QTextEdit {{
+                background: {panel}; color: {text};
+                border: 1px solid {line}; border-radius: 6px;
+                padding: 6px; font-size: 13px;
+            }}
+            QTextEdit:focus {{ border-color: #93c5fd; }}
+            QPushButton {{
+                background: {P["btn_bg"]}; color: {P["btn_fg"]};
+                border: 1px solid {line}; border-radius: 6px;
+                padding: 4px 14px; font-size: 12px;
+            }}
+            QPushButton:hover {{ background: {P["btn_hover"]}; }}
+        """)
 
-        # Drag/merge state for day-view clock
-        self._merge_drag_active: bool = False
-        self._drag_interval_idx: int = -1
-        self._drag_target_idx: int = -1
-        self._press_x: int = 0
-        self._press_y: int = 0
-        self._day_clock_cx: float = 0.0
-        self._day_clock_cy: float = 0.0
-        self._day_clock_r: float = 0.0
+    def populate(self, day: date, intervals: list[list[int]], merges: list[list[int]],
+                 total_s: int, live: bool, day_header: str, note: str, L: dict) -> None:
+        self._current_day = day
+
+        # clear
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+
+        def lbl(text_str, bold=False, color=None, size=13, top=0, bottom=0):
+            l = QLabel(text_str)
+            l.setWordWrap(True)
+            f = QFont(); f.setPointSize(size); f.setBold(bold)
+            l.setFont(f)
+            style = f"color: {color or P['text']};"
+            if top or bottom:
+                style += f" margin-top: {top}px; margin-bottom: {bottom}px;"
+            l.setStyleSheet(style)
+            return l
+
+        def sep(top=6, bottom=4):
+            container = QWidget()
+            vl = QVBoxLayout(container)
+            vl.setContentsMargins(0, top, 0, bottom)
+            vl.setSpacing(0)
+            line = QFrame()
+            line.setFrameShape(QFrame.Shape.HLine)
+            line.setStyleSheet(f"background: {P['line']}; border: none;")
+            line.setFixedHeight(1)
+            vl.addWidget(line)
+            return container
+
+        # 날짜 헤더
+        if day_header:
+            self._layout.addWidget(lbl(day_header, bold=True, size=13, bottom=1))
+
+        # 총 작업시간 — 1칸 들여쓰기
+        total_row = QWidget()
+        total_lay = QHBoxLayout(total_row)
+        total_lay.setContentsMargins(4, 0, 0, 6)
+        total_lbl = QLabel(f"{L['total_label']}   {seconds_to_hhmm(total_s)}")
+        f_t = QFont(); f_t.setPointSize(12); f_t.setBold(True)
+        total_lbl.setFont(f_t)
+        total_lbl.setStyleSheet("color: #60a5fa;")
+        total_lay.addWidget(total_lbl)
+        total_lay.addStretch()
+        self._layout.addWidget(total_row)
+
+        self._layout.addWidget(sep(top=2, bottom=6))
+
+        # 기록 구간 헤더
+        self._layout.addWidget(lbl(L["intervals"], bold=True, size=15, top=10, bottom=6))
+
+        groups = self._group_intervals(day, intervals, merges)
+        if not groups:
+            self._layout.addWidget(lbl(f"  {L['no_record']}", color=P["muted"], size=12))
+        else:
+            last_idx = len(groups) - 1
+            for gi, g in enumerate(groups):
+                is_last = (gi == last_idx)
+                if g["merged"]:
+                    s = g["intervals"][0][0]; e = g["intervals"][-1][1]
+                    row = QFrame()
+                    row.setStyleSheet(f"background: {P['merged_bg']}; border-radius: 5px; border: none;")
+                    rlay = QHBoxLayout(row)
+                    rlay.setContentsMargins(10, 5, 6, 5)
+                    tl = QLabel(f"  {seconds_to_hhmm(s)} – {seconds_to_hhmm(e)}")
+                    tl.setStyleSheet(f"color: {P['text']}; font-size: 13px; background: transparent;")
+                    rlay.addWidget(tl)
+                    if live and is_last:
+                        ll = QLabel(L["recording_now"])
+                        ll.setStyleSheet("color: #60a5fa; font-size: 11px; background: transparent;")
+                        rlay.addWidget(ll)
+                    rlay.addStretch()
+                    gaps = list(g["gaps"])
+                    xb = QPushButton("✕")
+                    xb.setFixedSize(20, 20)
+                    xb.setStyleSheet("background: transparent; border: none; color: #94a3b8; font-size: 10px; padding: 0;")
+                    xb.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                    def mk_unmerge(d=day, gs=gaps):
+                        def fn():
+                            for gap_s, gap_e in gs:
+                                self.unmerge_requested.emit(d, gap_s, gap_e)
+                        return fn
+                    xb.clicked.connect(mk_unmerge())
+                    rlay.addWidget(xb)
+                    wrapper = QWidget()
+                    wl = QVBoxLayout(wrapper)
+                    wl.setContentsMargins(0, 2, 0, 2)
+                    wl.addWidget(row)
+                    self._layout.addWidget(wrapper)
+                else:
+                    s, e = g["intervals"][0]
+                    row = QWidget()
+                    rl = QHBoxLayout(row)
+                    rl.setContentsMargins(4, 2, 0, 2)
+                    tl = QLabel(f"  {seconds_to_hhmm(s)} – {seconds_to_hhmm(e)}")
+                    tl.setStyleSheet(f"color: {P['text']}; font-size: 13px;")
+                    rl.addWidget(tl)
+                    if live and is_last:
+                        ll = QLabel(L["recording_now"])
+                        ll.setStyleSheet("color: #60a5fa; font-size: 11px;")
+                        rl.addWidget(ll)
+                    rl.addStretch()
+                    self._layout.addWidget(row)
+
+        self._layout.addWidget(sep(top=16, bottom=8))
+
+        # 메모
+        self._layout.addWidget(lbl(L["memo"], bold=True, size=15, bottom=4))
+        self._memo_edit = QTextEdit()
+        self._memo_edit.setPlainText(note)
+        self._memo_edit.setFixedHeight(90)
+        self._memo_edit.setAcceptRichText(False)
+        self._layout.addWidget(self._memo_edit)
+
+        save_btn = QPushButton(L["memo_save"])
+        save_btn.setFixedWidth(60)
+        save_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        save_btn.clicked.connect(lambda checked=False, d=day: self._save_memo(d))
+        btn_row = QWidget()
+        bl = QHBoxLayout(btn_row)
+        bl.setContentsMargins(0, 4, 0, 0)
+        bl.addStretch()
+        bl.addWidget(save_btn)
+        self._layout.addWidget(btn_row)
+        self._layout.addStretch()
+
+    def _save_memo(self, d: date) -> None:
+        if self._memo_edit is None:
+            return
+        try:
+            self.save_memo_requested.emit(d, self._memo_edit.toPlainText())
+        except RuntimeError:
+            pass
+
+    def _group_intervals(self, day: date, intervals: list[list[int]],
+                         merges: list[list[int]]) -> list[dict]:
+        if not intervals: return []
+        groups: list[dict] = []
+        used: set[int] = set()
+
+        for merge_gap in merges:
+            gap_s, gap_e = merge_gap
+            # Find intervals immediately before and after the gap
+            before = [i for i, iv in enumerate(intervals) if i not in used and iv[1] <= gap_s]
+            after  = [i for i, iv in enumerate(intervals) if i not in used and iv[0] >= gap_e]
+            if before and after and before[-1] < after[0]:
+                idxs = list(range(before[-1], after[0] + 1))
+                if all(j not in used for j in idxs):
+                    used.update(idxs)
+                    groups.append({
+                        "merged": True,
+                        "intervals": [intervals[j] for j in idxs],
+                        "gaps": [merge_gap],
+                    })
+
+        for i, iv in enumerate(intervals):
+            if i not in used:
+                groups.append({"merged": False, "intervals": [iv], "gaps": []})
+        groups.sort(key=lambda g: g["intervals"][0][0])
+        return groups
+
+# ── 메인 드로잉 위젯 ─────────────────────────────────────
+class DrawingWidget(QWidget):
+    day_clicked = pyqtSignal(date)
+
+    def __init__(self, app_ref: "WorkTimerApp", parent=None):
+        super().__init__(parent)
+        self._app = app_ref
+        self.setMouseTracking(True)
+
+        # 일간 뷰 상태
+        self._day_cx = 0.0; self._day_cy = 0.0; self._day_r = 0.0
         self._day_intervals: list[list[int]] = []
-
-        # Calendar range selection state
-        self._cal_press_day: date | None = None
-        self._cal_drag_end: date | None = None
-        self._cal_drag_mode: bool = False
-        self._range_entry_winid: int | None = None
-        self._range_sel_start: date | None = None
-        self._range_sel_end: date | None = None
-
-        # Theme + expand state
-        self._theme = self._settings.get("theme", "light")
-        if self._theme == "dark":
-            PALETTE.update(PALETTE_DARK)
-        self._expanded: bool = False
-
-        self.root = Tk()
-        self.root.title(APP_NAME)
-        self.root.geometry("1180x760")
-        self.root.minsize(940, 620)
-        self.root.configure(bg=PALETTE["bg"])
-        self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
-        self._tk_icon = None
-        self._pil_icon = None
-        self._set_window_icon()
-
-        today = date.today()
-        self.year = today.year
-        self.month = today.month
-        self.view = "month"  # month | day | year
-        self.year_year = today.year
-        self.detail_day: date | None = None
-        self._day_hitboxes: list[tuple[float, float, float, float, date]] = []
-        self._year_month_hitboxes: list[tuple[float, float, float, float, int, int]] = []
-        self._detail_back_hitbox: tuple[float, float, float, float] | None = None
-        self._embedded_widgets: list[tk.Widget] = []
-        self._redraw_pending = False
-        self._tray_icon = None
-
-        self.tracker = ActivityTracker(self.log, self.schedule_redraw,
-                                       recovered_start=_recovered_start)
-        self._build_ui()
-        if self._icon_style:
-            self._apply_icon(self._icon_style, save=False)
-        if self._first_launch:
-            self.root.after(600, self.open_icon_picker)
-
-    # ── UI 구성 ────────────────────────────────────────
-    def _build_ui(self) -> None:
-        self._header_frame: Frame | None = None
-        self._footer_label: Label | None = None
-        self.canvas = None  # 파괴된 위젯 참조를 먼저 초기화 (_build_header before= 오류 방지)
-        self._build_header()
-
-        # 캔버스
-        self.canvas = Canvas(self.root, bg=PALETTE["bg"], highlightthickness=0)
-        self.canvas.pack(fill=BOTH, expand=True, padx=18, pady=(0, 4))
-        self.canvas.bind("<Configure>", lambda _: self.schedule_redraw())
-        self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
-        self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
-        self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
-
-        # 푸터
-        self._footer_label = Label(self.root, text=self._L["made_by"],
-                                    bg=PALETTE["bg"], fg=PALETTE["muted"],
-                                    font=("Malgun Gothic", 7))
-        self._footer_label.pack(pady=(0, 5))
-
-    def _build_header(self) -> None:
-        if self._header_frame is not None:
-            self._header_frame.destroy()
-        header = Frame(self.root, bg=PALETTE["bg"], height=66)
-        header.pack_propagate(False)  # 높이 고정 → place 자식 사용 가능
-        if hasattr(self, "canvas") and self.canvas is not None:
-            header.pack(fill=X, padx=18, pady=(14, 6), before=self.canvas)
-        else:
-            header.pack(fill=X, padx=18, pady=(14, 6))
-        self._header_frame = header
-
-        # ── 중앙 (place relx=0.5 → 완전 수평 중앙) ────
-        center_f = Frame(header, bg=PALETTE["bg"])
-        center_f.place(relx=0.5, y=0, anchor="n")
-
-        nav_row = Frame(center_f, bg=PALETTE["bg"])
-        nav_row.pack()
-
-        self._btn_prev = RoundedButton(nav_row, self._L["prev"], self.prev_month,
-                                       width=32, height=30, radius=15, ghost=True, font_size=15)
-        self._btn_prev.pack(side=LEFT, padx=(0, 10))
-
-        self.title_label = Label(nav_row, bg=PALETTE["bg"], fg=PALETTE["text"],
-                                  font=("Malgun Gothic", 16, "bold"), cursor="hand2")
-        self.title_label.pack(side=LEFT)
-        self.title_label.bind("<Button-1>", lambda _: self._title_click())
-
-        self._btn_next = RoundedButton(nav_row, self._L["next"], self.next_month,
-                                       width=32, height=30, radius=15, ghost=True, font_size=15)
-        self._btn_next.pack(side=LEFT, padx=(10, 0))
-
-        self.summary_label = Label(center_f, bg=PALETTE["bg"], fg=PALETTE["muted"],
-                                    font=("Malgun Gothic", 9))
-        self.summary_label.pack(pady=(3, 0))
-
-        # ── 우상단 (place relx=1.0 → 완전 우측) 2×2 ──
-        # 연간보기 | 설정
-        # 펼치기   | 기록내보내기
-        right_f = Frame(header, bg=PALETTE["bg"])
-        right_f.place(relx=1.0, y=0, anchor="ne")
-
-        bw, bh, gap = 80, 26, 3
-
-        self._btn_year = RoundedButton(right_f, self._L["year_view"], self.toggle_year_view,
-                                       width=bw, height=bh, radius=12)
-        self._btn_year.grid(row=0, column=0, padx=(0, gap), pady=(0, gap))
-
-        self._btn_settings = RoundedButton(right_f, self._L["settings"], self.open_settings,
-                                           width=bw, height=bh, radius=12, ghost=True)
-        self._btn_settings.grid(row=0, column=1, pady=(0, gap))
-
-        self._btn_expand = RoundedButton(right_f,
-                                          self._L.get("collapse_btn", "접기") if self._expanded
-                                          else self._L.get("expand_btn", "펼치기"),
-                                          self.toggle_expand,
-                                          width=bw, height=bh, radius=12)
-        self._btn_expand.grid(row=1, column=0, padx=(0, gap))
-
-        self._btn_export = RoundedButton(right_f, self._L["export"], self.open_export,
-                                         width=bw, height=bh, radius=12)
-        self._btn_export.grid(row=1, column=1)
-
-    def _apply_theme(self) -> None:
-        """Tear down and rebuild entire UI with new PALETTE."""
-        for w in self.root.winfo_children():
-            w.destroy()
-        self._embedded_widgets = []
-        self._header_frame = None
-        self._footer_label = None
-        self.root.configure(bg=PALETTE["bg"])
-        self._build_ui()
-        self.redraw()
-        self._set_window_icon()
-
-    def _title_click(self) -> None:
-        if self.view == "day":
-            self.close_day_detail()
-        else:
-            self.go_today()
-
-    # ── 언어 갱신 ──────────────────────────────────────
-    def _apply_lang(self) -> None:
-        self._L = LANGUAGES[self._lang_name]
-        self._build_header()
-        self.redraw()
-
-    # ── 네비게이션 ────────────────────────────────────
-    def prev_month(self) -> None:
-        if self.view == "year":
-            self.year_year -= 1
-        elif self.view == "day" and self.detail_day is not None:
-            self.open_day_detail(self.detail_day - timedelta(days=1))
-            return
-        else:
-            self.detail_day = None
-            if self.view not in ("expand",):
-                self.view = "month"
-            if self.month == 1:
-                self.year -= 1; self.month = 12
-            else:
-                self.month -= 1
-        self.redraw()
-
-    def next_month(self) -> None:
-        if self.view == "year":
-            self.year_year += 1
-        elif self.view == "day" and self.detail_day is not None:
-            self.open_day_detail(self.detail_day + timedelta(days=1))
-            return
-        else:
-            self.detail_day = None
-            if self.view not in ("expand",):
-                self.view = "month"
-            if self.month == 12:
-                self.year += 1; self.month = 1
-            else:
-                self.month += 1
-        self.redraw()
-
-    def go_today(self) -> None:
-        today = date.today()
-        self.year = today.year
-        self.month = today.month
-        self.year_year = today.year
-        self.detail_day = None
-        self.view = "month"
-        self.redraw()
-
-    def toggle_year_view(self) -> None:
-        if self.view == "year":
-            self.view = "month"
-        else:
-            self.view = "year"
-            self.year_year = self.year
-        self.detail_day = None
-        self.redraw()
-
-    def toggle_expand(self) -> None:
-        self._expanded = not self._expanded
-        if self._expanded:
-            sw = self.root.winfo_screenwidth()
-            self.root.geometry(f"{min(sw - 60, 2600)}x760")
-            self.root.minsize(1800, 620)
-            self.view = "expand"
-        else:
-            self.root.geometry("1180x760")
-            self.root.minsize(940, 620)
-            self.view = "month"
-        self._build_header()
-        self.detail_day = None
-        self.redraw()
-
-    def open_day_detail(self, day: date) -> None:
-        self.detail_day = day
-        self.year = day.year
-        self.month = day.month
-        self.view = "day"
-        self.redraw()
-
-    def close_day_detail(self) -> None:
-        self.detail_day = None
-        self.view = "month"
-        self.redraw()
-
-    # ── 클릭/드래그 핸들러 ────────────────────────────
-    def _on_canvas_press(self, event) -> None:
-        self._press_x = event.x
-        self._press_y = event.y
+        self._press_x = 0; self._press_y = 0
         self._merge_drag_active = False
         self._drag_interval_idx = -1
-        self._drag_target_idx = -1
+        self._drag_current_sec = -1  # 드래그 중 현재 위치 (시각 피드백용)
 
-        if self.view == "day":
-            # Back button
-            if self._detail_back_hitbox:
-                x1, y1, x2, y2 = self._detail_back_hitbox
-                if x1 <= event.x <= x2 and y1 <= event.y <= y2:
-                    self.close_day_detail()
-                    return
-            # Drag-to-merge on clock
-            if self._is_on_clock(event.x, event.y):
-                sec = self._clock_pos_to_sec(event.x, event.y)
+        # 월간 뷰 상태
+        self._day_hitboxes: list[tuple[float, float, float, float, date]] = []
+        self._cal_press_day: date | None = None
+
+        # 날짜 범위 선택 (Ctrl+드래그)
+        self._range_start: date | None = None
+        self._range_end: date | None = None
+        self._range_dragging = False
+
+        # 연간 뷰
+        self._year_month_hitboxes: list[tuple[float, float, float, float, int, int]] = []
+
+        # 우측 패널
+        self._right_panel = RightPanel(self)
+        self._right_panel.hide()
+        self._right_panel.unmerge_requested.connect(self._on_unmerge)
+        self._right_panel.save_memo_requested.connect(self._on_save_memo)
+
+    def _on_unmerge(self, d: date, gs: int, ge: int) -> None:
+        self._app.log.remove_merge(d, gs, ge)
+        self._app.redraw()
+
+    def _on_save_memo(self, d: date, text: str) -> None:
+        self._app.log.set_note_for(d, text)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._app.schedule_redraw()
+
+    def refresh_day_panel(self, d: date, intervals: list[list[int]], merges: list[list[int]],
+                          total_s: int, live: bool, day_header: str, note: str) -> None:
+        # 메모 편집 중이면 재구성 건너뜀
+        if (self._right_panel._current_day == d and
+                self._right_panel._memo_edit is not None and
+                self._right_panel._memo_edit.hasFocus()):
+            return
+        self._right_panel._apply_style()
+        self._right_panel.populate(d, intervals, merges, total_s, live, day_header, note,
+                                   self._app.L)
+
+    # ── 페인트 진입점 ──────────────────────────────────
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), pc("bg"))
+
+        view = self._app.view
+        if view == "month":
+            self._right_panel.hide()
+            self._draw_month(painter)
+        elif view == "multi_month":
+            self._right_panel.hide()
+            self._draw_multi_month(painter)
+        elif view == "day":
+            self._draw_day_clock(painter)
+        elif view == "year":
+            self._right_panel.hide()
+            self._draw_year(painter)
+        elif view == "multi_year":
+            self._right_panel.hide()
+            self._draw_multi_year(painter)
+
+    # ── 월간 뷰 ───────────────────────────────────────
+    def _draw_month_grid(self, painter: QPainter, year: int, month: int,
+                         area_x: float, area_y: float, area_w: float, area_h: float,
+                         collect_hitboxes: bool = True) -> None:
+        """단일 월 달력을 (area_x, area_y, area_w, area_h) 안에 그린다."""
+        app = self._app; L = app.L
+        today = date.today()
+
+        cal = calendar.monthcalendar(year, month)
+        rows = len(cal)
+        wdays = L["weekdays"]
+
+        pad = 4
+        header_h = 24
+        grid_top = area_y + header_h + pad
+        grid_h = area_y + area_h - grid_top - pad
+        cell_w = area_w / 7
+        cell_h = grid_h / rows
+
+        # 요일 헤더
+        font_wd = QFont(); font_wd.setPointSize(9); font_wd.setBold(True)
+        painter.setFont(font_wd)
+        for col, wd in enumerate(wdays):
+            x = area_x + col * cell_w
+            color = "#ef4444" if col == 0 else "#3b82f6" if col == 6 else P["muted"]
+            painter.setPen(QColor(color))
+            painter.drawText(QRectF(x, area_y, cell_w, header_h),
+                             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, wd)
+
+        ranges = app.log.ranges_for_month(year, month)
+
+        for row_i, week in enumerate(cal):
+            for col_i, day_num in enumerate(week):
+                if day_num == 0:
+                    continue
+                d = date(year, month, day_num)
+                cx = area_x + col_i * cell_w
+                cy = grid_top + row_i * cell_h
+                cell_rect = QRectF(cx + 1, cy + 1, cell_w - 2, cell_h - 2)
+
+                # 범위 선택 중 하이라이트
+                in_drag_range = False
+                if self._range_dragging and self._range_start and self._range_end:
+                    lo = min(self._range_start, self._range_end)
+                    hi = max(self._range_start, self._range_end)
+                    in_drag_range = lo <= d <= hi
+
+                # 날짜 묶음 범위
+                in_range = any(r["start_date"] <= d <= r["end_date"] for r in ranges)
+                range_label = next((r["label"] for r in ranges if r["start_date"] <= d <= r["end_date"]), "")
+
+                is_today = (d == today)
+
+                # 셀 배경
+                if in_drag_range:
+                    painter.setPen(QPen(QColor(P["range_border"]), 1.5))
+                    painter.setBrush(QColor(P["range_bg"]))
+                elif is_today:
+                    painter.setPen(QPen(QColor(P["today_border"]), 2.0))
+                    painter.setBrush(QColor(P["panel"]))
+                else:
+                    painter.setPen(QPen(QColor(P["line"]), 0.8))
+                    painter.setBrush(QColor(P["panel"]))
+                painter.drawRoundedRect(cell_rect, 5, 5)
+
+                # 범위 band (상단 줄)
+                if in_range:
+                    band = QRectF(cx + 2, cy + 2, cell_w - 4, 4)
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QColor(P["range_border"]))
+                    painter.drawRoundedRect(band, 2, 2)
+
+                if collect_hitboxes:
+                    self._day_hitboxes.append((cx + 1, cy + 1, cx + cell_w - 1, cy + cell_h - 1, d))
+
+                # 미니 클럭
+                intervals = app.log.intervals_for(d)
+                live = (d == today and app.tracker.current_interval is not None)
+                if live:
+                    ci = app.tracker.current_interval
+                    display_ivs = merge_intervals(intervals + [[seconds_from_midnight(ci[0]), seconds_from_midnight(ci[1])]])
+                else:
+                    display_ivs = intervals
+                total_s = sum(e - s for s, e in display_ivs)
+
+                clock_r = min(cell_w * 0.28, cell_h * 0.28)
+                clock_cx = cx + cell_w * 0.5
+                clock_cy = cy + cell_h * 0.5 + 4
+                self._draw_clock(painter, clock_cx, clock_cy, clock_r, display_ivs,
+                                 P["clock"], mini=True, live=live)
+
+                # 날짜 숫자
+                font_day = QFont(); font_day.setPointSize(9); font_day.setBold(is_today)
+                painter.setFont(font_day)
+                painter.setPen(QColor(P["today_border"] if is_today else P["text"]))
+                painter.drawText(QRectF(cx + 4, cy + 3, cell_w - 8, 16),
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, str(day_num))
+
+                # 작업 시간
+                if total_s > 0:
+                    font_t = QFont(); font_t.setPointSize(8)
+                    painter.setFont(font_t)
+                    painter.setPen(QColor(P["active_dark"] if is_today else P["muted"]))
+                    painter.drawText(QRectF(cx + 2, cy + cell_h - 14, cell_w - 4, 12),
+                                     Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                                     seconds_to_hhmm(total_s))
+
+    def _draw_month(self, painter: QPainter) -> None:
+        self._day_hitboxes = []
+        w = self.width(); h = self.height()
+        pad = 12
+        self._draw_month_grid(painter, self._app.year, self._app.month,
+                              pad, pad, w - pad * 2, h - pad * 2,
+                              collect_hitboxes=True)
+
+    def _draw_multi_month(self, painter: QPainter) -> None:
+        """이전·이번·다음 달 3개를 가로로 나란히 표시."""
+        self._day_hitboxes = []
+        app = self._app
+        w = self.width(); h = self.height()
+        pad = 8
+        col_w = (w - pad * 4) / 3
+
+        months = []
+        for delta in (-1, 0, 1):
+            yr, mo = app.year, app.month
+            mo += delta
+            if mo < 1:   yr -= 1; mo += 12
+            if mo > 12:  yr += 1; mo -= 12
+            months.append((yr, mo))
+
+        for i, (yr, mo) in enumerate(months):
+            ax = pad + i * (col_w + pad)
+            ay = pad
+
+            # 월 제목
+            font_mo = QFont(); font_mo.setPointSize(11); font_mo.setBold(True)
+            painter.setFont(font_mo)
+            center_color = P["active"] if (yr == app.year and mo == app.month) else P["text"]
+            painter.setPen(QColor(center_color))
+            mo_names = app.L.get("month_names")
+            mo_label = f"{mo_names[mo - 1]} {yr}" if mo_names else f"{yr}년 {mo}월"
+            painter.drawText(QRectF(ax, ay, col_w, 22),
+                             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                             mo_label)
+
+            # 구분선 (현재 달 제외)
+            if i != 1:
+                painter.setPen(QPen(QColor(P["line"]), 1))
+                if i == 0:
+                    painter.drawLine(QPointF(ax + col_w + pad / 2, ay),
+                                     QPointF(ax + col_w + pad / 2, ay + h - pad * 2))
+
+            self._draw_month_grid(painter, yr, mo,
+                                  ax, ay + 26, col_w, h - ay - 26 - pad,
+                                  collect_hitboxes=True)
+
+    # ── 일간 뷰 (시계만 그림, 패널 populate는 redraw()에서) ──
+    def _draw_day_clock(self, painter: QPainter) -> None:
+        app = self._app
+        d = app.detail_day
+        if d is None: return
+        w = self.width(); h = self.height()
+        today = date.today()
+
+        right_panel_w = min(260, int(w * 0.35))
+        pad = 20
+        clock_area_w = w - right_panel_w - pad * 2
+        cx = pad + clock_area_w / 2
+        cy = h / 2
+        radius = min(clock_area_w / 2, (h - 80) / 2) * 0.85
+
+        intervals = app.log.intervals_for(d)
+        live = (d == today and app.tracker.current_interval is not None)
+        if live:
+            ci = app.tracker.current_interval
+            display_ivs = merge_intervals(intervals + [[seconds_from_midnight(ci[0]), seconds_from_midnight(ci[1])]])
+        else:
+            display_ivs = list(intervals)
+
+        self._day_cx = cx; self._day_cy = cy; self._day_r = radius
+        self._day_intervals = list(display_ivs)
+
+        self._draw_clock(painter, cx, cy, radius, display_ivs, P["clock"], mini=False, live=live)
+        self._draw_hour_labels(painter, cx, cy, radius)
+
+        # 드래그 중 선 피드백
+        if self._merge_drag_active and self._drag_interval_idx >= 0 and self._drag_current_sec >= 0:
+            sec = self._drag_current_sec
+            angle = math.radians(90 - (sec / 86400) * 360)
+            x2 = cx + math.cos(angle) * radius * 0.96
+            y2 = cy - math.sin(angle) * radius * 0.96
+            painter.setPen(QPen(QColor("#f59e0b"), 2, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(cx, cy), QPointF(x2, y2))
+
+        # 우측 패널 위치
+        panel_x = int(w - right_panel_w - pad)
+        panel_y = pad
+        panel_h = h - pad * 2
+        self._right_panel.setGeometry(panel_x, panel_y, right_panel_w, panel_h)
+        if not self._right_panel.isVisible():
+            self._right_panel.show()
+
+    # ── 연간 뷰 ───────────────────────────────────────
+    def _draw_year(self, painter: QPainter) -> None:
+        """단일 연도 — 4열×3행으로 12개월 히트맵."""
+        self._draw_year_impl(painter, [self._app.year_year])
+
+    def _draw_multi_year(self, painter: QPainter) -> None:
+        """3개년 — 이전·현재·다음 나란히."""
+        yr = self._app.year_year
+        self._draw_year_impl(painter, [yr - 1, yr, yr + 1])
+
+    def _draw_year_impl(self, painter: QPainter, years: list[int]) -> None:
+        app = self._app; L = app.L
+        center_yr = app.year_year
+        w = self.width(); h = self.height()
+        self._year_month_hitboxes = []
+        today = date.today()
+        n_cols = len(years)
+        col_pad = 10
+        yr_pad_top = 8
+
+        if n_cols == 1:
+            # 단일 연도: 4열×3행
+            yr = years[0]
+            mo_cols = 4; mo_rows = 3
+            mo_top = yr_pad_top + 28
+            mo_w = (w - col_pad * 2) / mo_cols
+            mo_h = (h - mo_top - col_pad) / mo_rows
+            mo_names = L.get("month_names")
+
+            font_yr = QFont(); font_yr.setPointSize(14); font_yr.setBold(True)
+            painter.setFont(font_yr)
+            painter.setPen(QColor(P["text"]))
+            painter.drawText(QRectF(0, yr_pad_top, w, 24),
+                             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, str(yr))
+
+            for mo in range(1, 13):
+                mc = (mo - 1) % mo_cols
+                mr = (mo - 1) // mo_cols
+                mx = col_pad + mc * mo_w
+                my = mo_top + mr * mo_h
+                self._draw_year_month(painter, yr, mo, mx, my, mo_w, mo_h, today, mo_names)
+        else:
+            # 다중 연도: 연도별 열
+            col_w = (w - col_pad * (n_cols + 1)) / n_cols
+            mo_cols = 3; mo_rows = 4
+            mo_names = L.get("month_names")
+
+            for yi, yr in enumerate(years):
+                col_x = col_pad + yi * (col_w + col_pad)
+                font_yr = QFont(); font_yr.setPointSize(12); font_yr.setBold(True)
+                painter.setFont(font_yr)
+                yr_color = P["active"] if yr == center_yr else P["text"]
+                painter.setPen(QColor(yr_color))
+                painter.drawText(QRectF(col_x, yr_pad_top, col_w, 22),
+                                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, str(yr))
+                if yi > 0:
+                    painter.setPen(QPen(QColor(P["line"]), 1))
+                    painter.drawLine(QPointF(col_x - col_pad / 2, yr_pad_top),
+                                     QPointF(col_x - col_pad / 2, h - col_pad))
+                mo_top = yr_pad_top + 26
+                mo_w = col_w / mo_cols
+                mo_h = (h - mo_top - col_pad) / mo_rows
+                for mo in range(1, 13):
+                    mc = (mo - 1) % mo_cols
+                    mr = (mo - 1) // mo_cols
+                    mx = col_x + mc * mo_w
+                    my = mo_top + mr * mo_h
+                    self._draw_year_month(painter, yr, mo, mx, my, mo_w, mo_h, today, mo_names)
+
+    def _draw_year_month(self, painter: QPainter, yr: int, mo: int,
+                         mx: float, my: float, mo_w: float, mo_h: float,
+                         today: date, mo_names) -> None:
+        app = self._app
+        mo_lbl = mo_names[mo - 1][:3] if mo_names else f"{mo}월"
+        font_mo = QFont(); font_mo.setPointSize(7)
+        painter.setFont(font_mo)
+        painter.setPen(QColor(P["muted"]))
+        painter.drawText(QRectF(mx, my, mo_w, 13),
+                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, mo_lbl)
+        cal = calendar.monthcalendar(yr, mo)
+        n_weeks = len(cal)
+        avail_h = mo_h - 13
+        avail_w = mo_w - 2
+        day_sz = min(avail_w / 7, avail_h / n_weeks)
+        grid_x = mx + (avail_w - day_sz * 7) / 2 + 1
+        grid_y = my + 13
+        max_s = max((app.log.total_seconds_for(date(yr, mo, d))
+                     for week in cal for d in week if d != 0), default=1) or 1
+        self._year_month_hitboxes.append((mx, my, mx + mo_w, my + mo_h, yr, mo))
+        for r_i, week in enumerate(cal):
+            for c_i, day_num in enumerate(week):
+                if day_num == 0: continue
+                d = date(yr, mo, day_num)
+                total = app.log.total_seconds_for(d)
+                dx = grid_x + c_i * day_sz
+                dy = grid_y + r_i * day_sz
+                ratio = total / max_s if max_s > 0 else 0
+                sz = max(day_sz - 1, 1)
+                if total > 0:
+                    base = QColor(P["active"]); base.setAlphaF(0.2 + 0.8 * ratio)
+                    painter.fillRect(QRectF(dx + 0.5, dy + 0.5, sz, sz), base)
+                else:
+                    painter.fillRect(QRectF(dx + 0.5, dy + 0.5, sz, sz), QColor(P["line"]))
+                if d == today:
+                    painter.setPen(QPen(QColor(P["today_border"]), 1))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawRect(QRectF(dx + 0.5, dy + 0.5, sz, sz))
+
+    # ── 시계 그리기 ───────────────────────────────────
+    def _draw_clock(self, painter: QPainter, cx: float, cy: float, radius: float,
+                    intervals: list[list[int]], fill: str,
+                    mini: bool = False, live: bool = False) -> None:
+        rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(fill))
+        painter.drawEllipse(rect)
+
+        bg_pix = getattr(self._app, "_clock_bg_pixmap", None)
+        if bg_pix:
+            painter.save()
+            clip = QPainterPath()
+            clip.addEllipse(rect)
+            painter.setClipPath(clip)
+            painter.setOpacity(0.65 if mini else 0.82)
+            painter.drawPixmap(rect.toRect(), bg_pix)
+            painter.setOpacity(1.0)
+            painter.restore()
+        has_bg = bool(bg_pix)
+
+        for i, (s, e) in enumerate(intervals):
+            dur = e - s
+            if dur <= 0: continue
+            is_live_seg = live and (i == len(intervals) - 1)
+            color = QColor(P["active"])
+            if is_live_seg:
+                color = QColor(P["active"]); color.setAlphaF(0.65)
+            if has_bg:
+                color.setAlphaF(color.alphaF() * 0.80)
+
+            if dur < 120 and not mini:
+                mid = (s + e) / 2
+                angle = math.radians(90 - (mid / 86400) * 360)
+                x1 = cx + math.cos(angle) * radius * 0.1
+                y1 = cy - math.sin(angle) * radius * 0.1
+                x2 = cx + math.cos(angle) * radius * 0.97
+                y2 = cy - math.sin(angle) * radius * 0.97
+                painter.setPen(QPen(color, 2))
+                painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+                continue
+            if mini and dur < 120:
+                continue
+
+            start_angle = int((90 - s / 86400 * 360) * 16)
+            span_angle  = int(-(e - s) / 86400 * 360 * 16)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawPie(rect, start_angle, span_angle)
+
+        painter.setPen(QPen(QColor(P["clock_line"]), 1.5 if not mini else 1.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(rect)
+
+        if not mini:
+            for hour in range(0, 24, 3):
+                angle = math.radians(90 - (hour / 24) * 360)
+                major = hour % 6 == 0
+                inner = 0.82 if major else 0.90
+                x1 = cx + math.cos(angle) * radius * inner
+                y1 = cy - math.sin(angle) * radius * inner
+                x2 = cx + math.cos(angle) * radius * 0.96
+                y2 = cy - math.sin(angle) * radius * 0.96
+                painter.setPen(QPen(QColor(P["clock_line"]), 1.2))
+                painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        else:
+            for hour in (0, 6, 12, 18):
+                angle = math.radians(90 - (hour / 24) * 360)
+                x1 = cx + math.cos(angle) * radius * 0.80
+                y1 = cy - math.sin(angle) * radius * 0.80
+                x2 = cx + math.cos(angle) * radius * 0.96
+                y2 = cy - math.sin(angle) * radius * 0.96
+                painter.setPen(QPen(QColor(P["clock_line"]), 0.8))
+                painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+
+        if not mini:
+            cr = 4
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(P["center"]))
+            painter.drawEllipse(QRectF(cx - cr, cy - cr, cr * 2, cr * 2))
+
+    def _draw_hour_labels(self, painter: QPainter, cx: float, cy: float, radius: float) -> None:
+        font = QFont(); font.setPointSize(9); font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#334155" if self._app._theme == "light" else "#94a3b8"))
+        for hour in range(0, 24, 3):
+            angle = math.radians(90 - (hour / 24) * 360)
+            tx = cx + math.cos(angle) * radius * 1.14
+            ty = cy - math.sin(angle) * radius * 1.14
+            painter.drawText(QRectF(tx - 16, ty - 10, 32, 20),
+                             Qt.AlignmentFlag.AlignCenter, f"{hour:02d}")
+
+    # ── 마우스 이벤트 ──────────────────────────────────
+    def _hit_day(self, x, y) -> date | None:
+        for x1, y1, x2, y2, d in self._day_hitboxes:
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                return d
+        return None
+
+    def mousePressEvent(self, event) -> None:
+        self._press_x = event.pos().x()
+        self._press_y = event.pos().y()
+        self._merge_drag_active = False
+        self._drag_interval_idx = -1
+        self._drag_current_sec = -1
+
+        app = self._app
+        x, y = event.pos().x(), event.pos().y()
+        ctrl = event.modifiers() & Qt.KeyboardModifier.ControlModifier
+
+        if app.view == "day":
+            if event.button() == Qt.MouseButton.LeftButton and self._is_on_clock(x, y):
+                sec = self._clock_pos_to_sec(x, y)
                 idx = self._sec_to_interval_idx(sec)
                 if idx >= 0:
                     self._drag_interval_idx = idx
                     self._merge_drag_active = True
             return
 
-        if self.view == "year":
+        if app.view in ("year", "multi_year"):
             for x1, y1, x2, y2, yr, mo in self._year_month_hitboxes:
-                if x1 <= event.x <= x2 and y1 <= event.y <= y2:
-                    self.year = yr; self.month = mo
-                    self.view = "month"
-                    self.detail_day = None
-                    self.redraw()
-                    return
+                if x1 <= x <= x2 and y1 <= y <= y2:
+                    app.year = yr; app.month = mo
+                    app.view = "month"; app.detail_day = None
+                    app.redraw(); return
             return
 
-        # Month view: record press day (detail opens on release if no drag)
-        self._cal_press_day = None
-        self._cal_drag_end = None
-        self._cal_drag_mode = False
-        for x1, y1, x2, y2, day in self._day_hitboxes:
-            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
-                self._cal_press_day = day
-                return
-
-    def _on_canvas_drag(self, event) -> None:
-        # Day view: clock merge drag
-        if self._merge_drag_active and self.view == "day":
-            dx = event.x - self._press_x
-            dy = event.y - self._press_y
-            if dx * dx + dy * dy < 64:
-                return
-            sec = self._clock_pos_to_sec(event.x, event.y)
-            new_tgt = self._sec_to_interval_idx(sec)
-            if new_tgt != self._drag_interval_idx and new_tgt >= 0:
-                if new_tgt != self._drag_target_idx:
-                    self._drag_target_idx = new_tgt
-                    self._draw_day_detail_view()
-            elif new_tgt == self._drag_interval_idx and self._drag_target_idx >= 0:
-                self._drag_target_idx = -1
-                self._draw_day_detail_view()
-            return
-
-        # Month view: calendar range selection drag
-        if self.view == "month" and self._cal_press_day is not None:
-            dx = event.x - self._press_x
-            dy = event.y - self._press_y
-            if dx * dx + dy * dy < 64:
-                return
-            self._cal_drag_mode = True
-            for x1, y1, x2, y2, day in self._day_hitboxes:
-                if x1 <= event.x <= x2 and y1 <= event.y <= y2:
-                    if day != self._cal_drag_end:
-                        self._cal_drag_end = day
-                        self._draw_calendar()
-                    break
-
-    def _on_canvas_release(self, event) -> None:
-        # Day view: clock merge
-        if self._merge_drag_active:
-            dx = event.x - self._press_x
-            dy = event.y - self._press_y
-            if (dx * dx + dy * dy) >= 64 and self._drag_interval_idx >= 0 and self._drag_target_idx >= 0:
-                self._do_merge(self._drag_interval_idx, self._drag_target_idx)
-            self._merge_drag_active = False
-            self._drag_interval_idx = -1
-            self._drag_target_idx = -1
-            self.redraw()
-            return
-
-        # Month view
-        if self.view == "month":
-            if self._cal_drag_mode and self._cal_press_day and self._cal_drag_end and \
-                    self._cal_drag_end != self._cal_press_day:
-                # Range drag complete → show label input
-                lo = min(self._cal_press_day, self._cal_drag_end)
-                hi = max(self._cal_press_day, self._cal_drag_end)
-                self._range_sel_start = lo
-                self._range_sel_end = hi
-                self._show_range_input(lo, hi)
+        # month / multi_month
+        d = self._hit_day(x, y)
+        if d:
+            if ctrl:
+                # Ctrl+클릭 → 범위 선택 시작
+                self._range_start = d
+                self._range_end = d
+                self._range_dragging = True
             else:
-                # Plain click → open day detail
-                if self._cal_press_day:
-                    self.open_day_detail(self._cal_press_day)
+                self._cal_press_day = d
+                self._range_dragging = False
+        else:
             self._cal_press_day = None
-            self._cal_drag_end = None
-            self._cal_drag_mode = False
+
+    def mouseMoveEvent(self, event) -> None:
+        app = self._app
+        x, y = event.pos().x(), event.pos().y()
+
+        if app.view == "day" and self._merge_drag_active:
+            sec = self._clock_pos_to_sec(x, y)
+            self._drag_current_sec = sec
+            self.update()
+            return
+
+        if self._range_dragging and app.view in ("month", "multi_month"):
+            d = self._hit_day(x, y)
+            if d:
+                self._range_end = d
+                self.update()
+
+    def mouseReleaseEvent(self, event) -> None:
+        app = self._app
+        x, y = event.pos().x(), event.pos().y()
+
+        if app.view == "day" and self._merge_drag_active:
+            sec = self._clock_pos_to_sec(x, y)
+            idx = self._sec_to_interval_idx(sec)
+            if idx >= 0 and idx != self._drag_interval_idx:
+                lo = min(self._drag_interval_idx, idx)
+                hi = max(self._drag_interval_idx, idx)
+                ivs = self._day_intervals
+                if lo + 1 <= hi < len(ivs):
+                    gap_s = ivs[lo][1]; gap_e = ivs[hi][0]
+                    app.log.add_merge(app.detail_day, gap_s, gap_e)
+                    app.redraw()
+            self._merge_drag_active = False
+            self._drag_current_sec = -1
+            self.update()
+            return
+
+        if self._range_dragging:
+            self._range_dragging = False
+            if self._range_start and self._range_end:
+                lo = min(self._range_start, self._range_end)
+                hi = max(self._range_start, self._range_end)
+                # 라벨 입력 다이얼로그
+                label, ok = QInputDialog.getText(self, "날짜 묶음", app.L["range_label_prompt"])
+                if ok and label.strip():
+                    app.log.add_range(lo, hi, label.strip())
+                    app.redraw()
+            self._range_start = None; self._range_end = None
+            self.update()
+            return
+
+        if app.view in ("month", "multi_month") and self._cal_press_day:
+            dx = abs(x - self._press_x); dy = abs(y - self._press_y)
+            if dx < 6 and dy < 6:
+                if event.button() == Qt.MouseButton.RightButton:
+                    # 우클릭 → 범위 삭제
+                    if app.log.remove_range_containing(self._cal_press_day):
+                        app.redraw()
+                else:
+                    app.open_day(self._cal_press_day)
+            self._cal_press_day = None
+
+    def contextMenuEvent(self, event) -> None:
+        # 우클릭 메뉴 (범위 삭제)
+        app = self._app
+        if app.view in ("month", "multi_month"):
+            d = self._hit_day(event.pos().x(), event.pos().y())
+            if d and any(r["start_date"] <= d <= r["end_date"]
+                         for r in app.log.ranges_for_month(app.year, app.month)):
+                from PyQt6.QtWidgets import QMenu as _QMenu
+                menu = _QMenu(self)
+                menu.addAction("날짜 묶음 삭제", lambda: (app.log.remove_range_containing(d), app.redraw()))
+                menu.exec(event.globalPos())
 
     def _is_on_clock(self, x: float, y: float) -> bool:
-        if self._day_clock_r <= 0:
-            return False
-        return (x - self._day_clock_cx) ** 2 + (y - self._day_clock_cy) ** 2 <= self._day_clock_r ** 2
+        if self._day_r <= 0: return False
+        return (x - self._day_cx) ** 2 + (y - self._day_cy) ** 2 <= self._day_r ** 2
 
     def _clock_pos_to_sec(self, x: float, y: float) -> int:
-        angle_deg = math.degrees(math.atan2(self._day_clock_cy - y, x - self._day_clock_cx))
-        return int(((90 - angle_deg) % 360) / 360 * 86400)
+        angle_deg = math.degrees(math.atan2(self._day_cy - y, x - self._day_cx))
+        frac = (90 - angle_deg) % 360 / 360
+        return int(frac * 86400)
 
     def _sec_to_interval_idx(self, sec: int) -> int:
         for i, (s, e) in enumerate(self._day_intervals):
-            if s <= sec <= e:
-                return i
+            if s <= sec <= e: return i
         return -1
 
-    def _do_merge(self, idx1: int, idx2: int) -> None:
-        if self.detail_day is None or not self._day_intervals:
-            return
-        a, b = sorted([idx1, idx2])
-        if b >= len(self._day_intervals) or b != a + 1:
-            return
-        e1 = self._day_intervals[a][1]
-        s2 = self._day_intervals[b][0]
-        if e1 < s2:
-            self.log.add_merge(self.detail_day, e1, s2)
+# ── 설정 다이얼로그 ──────────────────────────────────────
+class SettingsDialog(QDialog):
+    def __init__(self, app_ref: "WorkTimerApp", parent=None):
+        super().__init__(parent)
+        self._app = app_ref
+        L = app_ref.L
+        self.setWindowTitle(L["settings_title"])
+        self.setFixedWidth(380)
+        self.setModal(True)
+        self._icon_idx = app_ref._icon_idx
+        self._build()
+        self._apply_style()
 
-    def _group_intervals_with_merges(self, day: date,
-                                      intervals: list[list[int]]) -> list[dict]:
-        gap_set = {(g[0], g[1]) for g in self.log.merges_for(day)}
-        groups: list[dict] = []
-        i = 0
-        while i < len(intervals):
-            group_ivs = [intervals[i]]
-            group_gaps: list[tuple[int, int]] = []
-            while i + 1 < len(intervals):
-                e1 = intervals[i][1]
-                s2 = intervals[i + 1][0]
-                if (e1, s2) in gap_set:
-                    group_gaps.append((e1, s2))
-                    i += 1
-                    group_ivs.append(intervals[i])
-                else:
-                    break
-            groups.append({"intervals": group_ivs,
-                           "merged": len(group_ivs) > 1,
-                           "gaps": group_gaps})
-            i += 1
-        return groups
+    def _apply_style(self) -> None:
+        self.setStyleSheet(f"""
+            QDialog {{ background: {P['bg']}; }}
+            QLabel {{ color: {P['text']}; background: transparent; }}
+            QComboBox, QSpinBox {{
+                background: {P['panel']}; color: {P['text']};
+                border: 1px solid {P['line']}; border-radius: 5px; padding: 4px 8px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: {P['panel']}; color: {P['text']};
+                selection-background-color: {P['active']};
+                selection-color: #ffffff;
+                border: 1px solid {P['line']};
+                outline: none;
+            }}
+            QCheckBox {{ color: {P['text']}; }}
+            QPushButton {{
+                background: {P['btn_bg']}; color: {P['btn_fg']};
+                border: 1px solid {P['line']}; border-radius: 6px; padding: 6px 14px;
+            }}
+            QPushButton:hover {{ background: {P['btn_hover']}; }}
+        """)
 
-    def _show_range_input(self, start: date, end: date) -> None:
-        """Inline borderless text entry overlaid on the calendar after range drag."""
-        # Find the first row of the selected range to place the entry
-        cells = [(x1, y1, x2, y2, d) for x1, y1, x2, y2, d in self._day_hitboxes
-                 if start <= d <= end]
-        if not cells:
-            return
-        cells.sort(key=lambda c: (c[1], c[0]))
-        first_row_y = cells[0][1]
-        row0 = [c for c in cells if c[1] == first_row_y]
-        row0.sort(key=lambda c: c[0])
-        ex1, ey1, ex2, ey2 = row0[0][0], row0[0][1], row0[-1][2], row0[-1][3]
-        mid_x = (ex1 + ex2) / 2
-        mid_y = (ey1 + ey2) / 2
+    def _build(self) -> None:
+        app = self._app; L = app.L
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
 
-        entry_var = StringVar()
-        entry = tk.Entry(self.canvas, textvariable=entry_var,
-                         font=("Malgun Gothic", 9, "bold"),
-                         relief="flat", bd=0, bg="#bfdbfe", fg="#1e3a8a",
-                         highlightthickness=0, justify="center",
-                         insertbackground="#1e3a8a")
-        self._embedded_widgets.append(entry)
+        def row(label_text, widget):
+            r = QWidget(); lay = QHBoxLayout(r)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lbl = QLabel(label_text); lbl.setFixedWidth(120)
+            lay.addWidget(lbl); lay.addWidget(widget)
+            return r
 
-        win_id = self.canvas.create_window(mid_x, mid_y, window=entry,
-                                            width=ex2 - ex1 - 12, height=22)
-        self._range_entry_winid = win_id
-        entry.focus_set()
+        # 언어
+        lang_cb = QComboBox()
+        for k in LANGUAGES: lang_cb.addItem(k)
+        lang_cb.setCurrentText(app._lang_name)
+        layout.addWidget(row(L["lang_label"], lang_cb))
 
-        def _save(evt=None):
-            label = entry_var.get().strip()
-            if label:
-                self.log.add_range(start, end, label)
-            self._range_sel_start = None
-            self._range_sel_end = None
-            self._range_entry_winid = None
+        # 테마
+        theme_cb = QComboBox()
+        theme_cb.addItems([L["theme_light"], L["theme_dark"]])
+        theme_cb.setCurrentIndex(0 if app._theme == "light" else 1)
+        layout.addWidget(row(L["theme_label"], theme_cb))
+
+        # 유휴 감지 시간
+        idle_spin = QSpinBox()
+        idle_spin.setRange(1, 120)
+        idle_spin.setValue(IDLE_GRACE_SECONDS // 60)
+        layout.addWidget(row(L["idle_label"], idle_spin))
+
+        # 자동 시작
+        autostart_cb = QCheckBox(L["autostart"])
+        autostart_cb.setChecked(get_autostart())
+        layout.addWidget(autostart_cb)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"background: {P['line']}; border: none;"); sep.setFixedHeight(1)
+        layout.addWidget(sep)
+
+        # 아이콘 선택
+        icon_lbl = QLabel(L["icon_label"])
+        icon_lbl.setStyleSheet(f"color: {P['muted']}; font-size: 11px;")
+        layout.addWidget(icon_lbl)
+
+        icon_row = QWidget(); ilay = QHBoxLayout(icon_row); ilay.setContentsMargins(0, 0, 0, 0); ilay.setSpacing(6)
+        self._icon_btns: list[QPushButton] = []
+
+        def _refresh_icon_selection(selected_idx: int) -> None:
+            self._icon_idx = selected_idx
+            border_sel = P["active"]
+            for j, b in enumerate(self._icon_btns):
+                sel = (j == selected_idx)
+                b.setStyleSheet(f"border: 3px solid {border_sel if sel else 'transparent'}; border-radius: 8px; padding: 0;")
+
+        ICON_SZ = QSize(44, 44)  # 원형 클리핑 아이콘 크기
+        # 아이콘별 클립 크기: 투명 여백이 많은 아이콘은 크게 클립해서 콘텐츠가 같은 크기로 보임
+        ICON_CLIP_SIZES = [44, 44, 52, 44, 44]  # icon_3(54% 투명)만 크게 클립
+
+        for i, name in enumerate(ICON_NAMES):
+            clip_sz = ICON_CLIP_SIZES[i] if i < len(ICON_CLIP_SIZES) else 44
+            btn = QPushButton()
+            btn.setFixedSize(48, 48)
+            btn.setIcon(clip_icon_circle(load_icon(i), clip_sz))
+            btn.setIconSize(ICON_SZ)
+            btn.setToolTip(name)
+            selected = (i == self._icon_idx)
+            btn.setStyleSheet(
+                f"border: 3px solid {P['active'] if selected else 'transparent'}; border-radius: 8px; padding: 0;"
+            )
+            btn.clicked.connect(lambda _=False, ii=i: _refresh_icon_selection(ii))
+            self._icon_btns.append(btn)
+            ilay.addWidget(btn)
+
+        # 커스텀 아이콘 추가 버튼
+        add_icon_btn = QPushButton(L["icon_add"])
+        add_icon_btn.setFixedSize(56, 48)
+        add_icon_btn.setStyleSheet(f"border: 2px dashed {P['line']}; border-radius: 8px; color: {P['muted']}; font-size: 11px;")
+        def _add_custom_icon():
+            path, _ = QFileDialog.getOpenFileName(
+                self, "아이콘 이미지 선택", "",
+                "이미지 파일 (*.png *.ico *.jpg *.jpeg *.bmp *.webp)")
+            if path and path not in app._custom_icons:
+                app._custom_icons.append(path)
+                new_idx = len(ICON_FILES) + len(app._custom_icons) - 1
+                ci_btn = QPushButton()
+                ci_btn.setFixedSize(48, 48)
+                ci_btn.setIcon(clip_icon_circle(QIcon(path), 44))
+                ci_btn.setIconSize(ICON_SZ)
+                ci_btn.setToolTip(Path(path).name)
+                ci_btn.setStyleSheet("border: 3px solid transparent; border-radius: 8px; padding: 0;")
+                ci_btn.clicked.connect(lambda _=False, ii=new_idx: _refresh_icon_selection(ii))
+                self._icon_btns.append(ci_btn)
+                # add_icon_btn은 ilay에서 마지막 항목(stretch 제외)이므로 그 앞에 삽입
+                insert_pos = ilay.count() - 2  # before add_icon_btn
+                ilay.insertWidget(insert_pos, ci_btn)
+                _refresh_icon_selection(new_idx)
+                icon_row.adjustSize()
+        add_icon_btn.clicked.connect(_add_custom_icon)
+        ilay.addWidget(add_icon_btn)
+        ilay.addStretch()
+
+        # 아이콘 행 수평 스크롤로 감싸기 (넘칠 경우 대비)
+        icon_scroll = QScrollArea()
+        icon_scroll.setWidget(icon_row)
+        icon_scroll.setWidgetResizable(False)
+        icon_scroll.setFixedHeight(60)
+        icon_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        icon_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        icon_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        icon_scroll.setStyleSheet(f"background: {P['bg']}; border: none;")
+        layout.addWidget(icon_scroll)
+
+        # 시계 배경 이미지
+        bg_lbl = QLabel(L["clock_bg_label"])
+        bg_lbl.setStyleSheet(f"color: {P['muted']}; font-size: 11px;")
+        layout.addWidget(bg_lbl)
+
+        bg_row = QWidget(); blay = QHBoxLayout(bg_row); blay.setContentsMargins(0, 0, 0, 0); blay.setSpacing(6)
+        self._bg_name_lbl = QLabel(Path(app._clock_bg_path).name if app._clock_bg_path else L["clock_bg_none"])
+        self._bg_name_lbl.setStyleSheet(f"color: {P['text']}; font-size: 11px;")
+        self._bg_name_lbl.setMaximumWidth(160)
+        bg_pick_btn = QPushButton(L["clock_bg_pick"])
+        bg_pick_btn.setFixedHeight(28)
+        bg_clear_btn = QPushButton(L["clock_bg_clear"])
+        bg_clear_btn.setFixedHeight(28)
+        def _pick_bg():
+            path, _ = QFileDialog.getOpenFileName(
+                self, "시계 배경 이미지 선택", "",
+                "이미지 파일 (*.png *.jpg *.jpeg *.bmp *.webp)")
+            if path:
+                app._clock_bg_path = path
+                app._clock_bg_pixmap = QPixmap(path)
+                self._bg_name_lbl.setText(Path(path).name)
+        def _clear_bg():
+            app._clock_bg_path = ""
+            app._clock_bg_pixmap = None
+            self._bg_name_lbl.setText(L["clock_bg_none"])
+        bg_pick_btn.clicked.connect(_pick_bg)
+        bg_clear_btn.clicked.connect(_clear_bg)
+        blay.addWidget(self._bg_name_lbl)
+        blay.addWidget(bg_pick_btn)
+        blay.addWidget(bg_clear_btn)
+        blay.addStretch()
+        layout.addWidget(bg_row)
+
+        sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"background: {P['line']}; border: none;"); sep2.setFixedHeight(1)
+        layout.addWidget(sep2)
+
+        # 색상 설정
+        color_lbl = QLabel("색상 설정")
+        color_lbl.setStyleSheet(f"color: {P['muted']}; font-size: 11px;")
+        layout.addWidget(color_lbl)
+
+        def color_btn(key, label):
+            btn = QPushButton(label)
+            # 배경은 해당 색, 텍스트는 대비 색
+            bg = P[key]
+            # 어두운 색이면 흰 텍스트, 밝은 색이면 검은 텍스트
+            r, g, b = int(bg[1:3], 16), int(bg[3:5], 16), int(bg[5:7], 16)
+            luma = 0.299 * r + 0.587 * g + 0.114 * b
+            fg = "#ffffff" if luma < 140 else "#1e293b"
+            btn.setStyleSheet(f"background: {bg}; color: {fg}; border: 2px solid {P['line']}; border-radius: 5px; padding: 5px 8px; font-size: 11px;")
+            def pick():
+                c = QColorDialog.getColor(QColor(P[key]), self)
+                if c.isValid():
+                    P[key] = c.name()
+                    r2, g2, b2 = int(c.name()[1:3], 16), int(c.name()[3:5], 16), int(c.name()[5:7], 16)
+                    luma2 = 0.299 * r2 + 0.587 * g2 + 0.114 * b2
+                    fg2 = "#ffffff" if luma2 < 140 else "#1e293b"
+                    btn.setStyleSheet(f"background: {P[key]}; color: {fg2}; border: 2px solid {P['line']}; border-radius: 5px; padding: 5px 8px; font-size: 11px;")
+            btn.clicked.connect(pick)
+            return btn
+
+        color_row = QWidget(); clay = QHBoxLayout(color_row); clay.setContentsMargins(0, 0, 0, 0); clay.setSpacing(6)
+        clay.addWidget(color_btn("active", L["color_active"]))
+        clay.addWidget(color_btn("clock", L["color_clock_bg"]))
+        clay.addWidget(color_btn("center", L["color_center"]))
+        layout.addWidget(color_row)
+
+        reset_btn = QPushButton(L["color_reset"])
+        reset_btn.clicked.connect(self._reset_colors)
+        layout.addWidget(reset_btn)
+
+        sep3 = QFrame(); sep3.setFrameShape(QFrame.Shape.HLine)
+        sep3.setStyleSheet(f"background: {P['line']}; border: none;"); sep3.setFixedHeight(1)
+        layout.addWidget(sep3)
+
+        # 데이터
+        data_btn = QPushButton(L["data_path"])
+        data_btn.clicked.connect(lambda: os.startfile(str(DATA_DIR)))
+        layout.addWidget(data_btn)
+
+        reset_data_btn = QPushButton(L["reset_btn"])
+        reset_data_btn.setStyleSheet("background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5; border-radius: 6px; padding: 6px 14px;")
+        reset_data_btn.clicked.connect(self._reset_data)
+        layout.addWidget(reset_data_btn)
+
+        ok_btn = QPushButton("확인")
+        ok_btn.setStyleSheet(f"background: {P['btn_dark']}; color: #fff; border: none; border-radius: 6px; padding: 8px;")
+        ok_btn.clicked.connect(lambda: self._save(lang_cb, theme_cb, idle_spin, autostart_cb))
+        layout.addWidget(ok_btn)
+
+    def _save(self, lang_cb, theme_cb, idle_spin, autostart_cb) -> None:
+        global IDLE_GRACE_SECONDS
+        app = self._app
+        app._lang_name = lang_cb.currentText()
+        app.L = LANGUAGES.get(app._lang_name, LANG_KO)
+        new_theme = "light" if theme_cb.currentIndex() == 0 else "dark"
+        IDLE_GRACE_SECONDS = idle_spin.value() * 60
+        set_autostart(autostart_cb.isChecked())
+        app._icon_idx = self._icon_idx
+
+        if new_theme != app._theme:
+            app._theme = new_theme
+            P.update(PALETTE_DARK if new_theme == "dark" else PALETTE_LIGHT)
+            app.main_window.apply_palette()
+
+        # 아이콘 업데이트
+        icon = load_icon_any(app._icon_idx, app._custom_icons)
+        app.main_window.setWindowIcon(icon)
+        if app._tray:
+            app._tray.setIcon(icon)
+
+        settings = load_settings()
+        settings.update({
+            "lang": app._lang_name, "theme": app._theme,
+            "idle_grace_minutes": idle_spin.value(),
+            "color_active": P["active"], "color_clock_bg": P["clock"],
+            "color_center": P["center"], "icon_idx": app._icon_idx,
+            "clock_bg_path": app._clock_bg_path,
+            "custom_icons": app._custom_icons,
+        })
+        save_settings(settings)
+        app.redraw()
+        self.accept()
+
+    def _reset_colors(self) -> None:
+        base = PALETTE_DARK if self._app._theme == "dark" else PALETTE_LIGHT
+        for key in ("active", "clock", "center"):
+            P[key] = base[key]
+        self._app.redraw()
+        self.accept()
+        SettingsDialog(self._app, self.parent()).exec()
+
+    def _reset_data(self) -> None:
+        L = self._app.L
+        if QMessageBox.question(self, L["reset_title"], L["reset_confirm"]) == QMessageBox.StandardButton.Yes:
+            self._app.log.reset()
+            self._app.redraw()
+            self.accept()
+
+# ── 내보내기 다이얼로그 ──────────────────────────────────
+class ExportDialog(QDialog):
+    def __init__(self, app_ref: "WorkTimerApp", parent=None):
+        super().__init__(parent)
+        self._app = app_ref
+        L = app_ref.L
+        self.setWindowTitle(L["export_title"])
+        self.setFixedWidth(340)
+        self.setModal(True)
+        self._build()
+        self.setStyleSheet(f"""
+            QDialog {{ background: {P['bg']}; }}
+            QLabel {{ color: {P['text']}; background: transparent; }}
+            QRadioButton {{
+                color: {P['text']}; spacing: 10px; font-size: 13px;
+            }}
+            QRadioButton::indicator {{
+                width: 18px; height: 18px; border-radius: 9px;
+                border: 2px solid {P['active']};
+                background: {P['panel']};
+            }}
+            QRadioButton::indicator:checked {{
+                background: {P['active']};
+                border-color: {P['active']};
+                image: none;
+            }}
+            QPushButton {{
+                background: {P['btn_dark']}; color: #fff;
+                border: none; border-radius: 6px; padding: 10px;
+                font-size: 13px;
+            }}
+            QPushButton:hover {{ background: {P['btn_dark_hover']}; }}
+        """)
+
+    def _build(self) -> None:
+        L = self._app.L
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        layout.addWidget(QLabel(L["export_format"]))
+
+        self._fmt_group = QButtonGroup(self)
+        for i, (key, label) in enumerate([
+            ("simple", L["fmt_simple"]),
+            ("table",  L["fmt_table"]),
+            ("detail", L["fmt_detail"]),
+        ]):
+            rb = QRadioButton(label)
+            if i == 0: rb.setChecked(True)
+            rb.setProperty("fmt", key)
+            self._fmt_group.addButton(rb, i)
+            layout.addWidget(rb)
+
+        export_btn = QPushButton(L["export"])
+        export_btn.clicked.connect(self._do_export)
+        layout.addWidget(export_btn)
+
+    def _do_export(self) -> None:
+        app = self._app; L = app.L
+        btn = self._fmt_group.checkedButton()
+        fmt = btn.property("fmt") if btn else "simple"
+        lines = self._build_text(fmt)
+        ts = now_local().strftime("%Y-%m-%d_%H-%M")
+        path, _ = QFileDialog.getSaveFileName(self, L["export_title"],
+                                               str(DATA_DIR / f"work_export_{ts}.txt"),
+                                               "Text Files (*.txt)")
+        if path:
+            Path(path).write_text("\n".join(lines), encoding="utf-8")
+            QMessageBox.information(self, L["export_done"], L["export_saved"].format(path))
+        self.accept()
+
+    def _build_text(self, fmt: str) -> list[str]:
+        app = self._app; L = app.L
+        lines = [L["export_header"], f"{L['export_time']} {now_local().strftime('%Y-%m-%d %H:%M')}", ""]
+        for dk in sorted(app.log.days.keys()):
+            d = date.fromisoformat(dk)
+            ivs = app.log.intervals_for(d)
+            if not ivs: continue
+            total = seconds_to_hhmm(sum(e - s for s, e in ivs))
+            note = app.log.note_for(d)
+            wd = L["weekday_names"][d.weekday()]
+            if fmt == "simple":
+                lines.append(f"{dk} ({wd})  {total}" + (f"  [{note}]" if note else ""))
+            elif fmt == "table":
+                lines.append(f"| {dk} | {wd} | {total} | {note} |")
+            elif fmt == "detail":
+                lines.append(f"{dk} ({wd})  {total}")
+                for s, e in ivs:
+                    lines.append(f"  {seconds_to_hhmm(s)} – {seconds_to_hhmm(e)}")
+                if note: lines.append(f"  [{note}]")
+        return lines
+
+# ── 메인 윈도우 ──────────────────────────────────────────
+class MainWindow(QMainWindow):
+    def __init__(self, app_ref: "WorkTimerApp"):
+        super().__init__()
+        self._app = app_ref
+        self.setWindowTitle(APP_NAME)
+        self.resize(1180, 760)
+        self.setMinimumSize(940, 620)
+        self._build()
+        self.apply_palette()
+
+    def _build(self) -> None:
+        app = self._app; L = app.L
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_lay = QVBoxLayout(central)
+        main_lay.setContentsMargins(18, 14, 18, 5)
+        main_lay.setSpacing(6)
+
+        # ── 헤더
+        header = QWidget(); header.setFixedHeight(66)
+        header_lay = QHBoxLayout(header)
+        header_lay.setContentsMargins(0, 0, 0, 0)
+
+        left_spacer = QWidget(); left_spacer.setMinimumWidth(200)
+        header_lay.addWidget(left_spacer)
+
+        center_w = QWidget()
+        center_lay = QVBoxLayout(center_w)
+        center_lay.setContentsMargins(0, 0, 0, 0); center_lay.setSpacing(2)
+
+        nav_row = QWidget()
+        nav_lay = QHBoxLayout(nav_row); nav_lay.setContentsMargins(0, 0, 0, 0); nav_lay.setSpacing(8)
+
+        self.btn_prev = self._nav_btn(L["prev"], app.prev_month)
+        self.title_label = QLabel()
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.title_label.mousePressEvent = lambda _: app.title_click()
+        self.btn_next = self._nav_btn(L["next"], app.next_month)
+
+        nav_lay.addWidget(self.btn_prev)
+        nav_lay.addWidget(self.title_label)
+        nav_lay.addWidget(self.btn_next)
+        center_lay.addWidget(nav_row)
+
+        self.subtitle_label = QLabel()
+        self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center_lay.addWidget(self.subtitle_label)
+        header_lay.addWidget(center_w)
+
+        right_w = QWidget(); right_w.setMinimumWidth(200)
+        right_lay = QGridLayout(right_w)
+        right_lay.setContentsMargins(0, 0, 0, 0); right_lay.setSpacing(4)
+        right_lay.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.btn_year     = self._tool_btn(L["year_view"],   app.toggle_year)
+        self.btn_settings = self._tool_btn(L["settings"],    app.open_settings)
+        self.btn_expand   = self._tool_btn(L["expand_btn"],  app.toggle_expand)
+        self.btn_export   = self._tool_btn(L["export"],      app.open_export)
+
+        right_lay.addWidget(self.btn_year,     0, 0)
+        right_lay.addWidget(self.btn_settings, 0, 1)
+        right_lay.addWidget(self.btn_expand,   1, 0)
+        right_lay.addWidget(self.btn_export,   1, 1)
+        header_lay.addWidget(right_w)
+
+        main_lay.addWidget(header)
+
+        self.canvas = DrawingWidget(app)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        main_lay.addWidget(self.canvas)
+
+        self.footer_lbl = QLabel(L["made_by"])
+        self.footer_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_lay.addWidget(self.footer_lbl)
+
+    def _nav_btn(self, text, fn) -> QPushButton:
+        btn = QPushButton(text); btn.setFixedSize(32, 30)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.clicked.connect(fn); return btn
+
+    def _tool_btn(self, text, fn) -> QPushButton:
+        btn = QPushButton(text); btn.setFixedHeight(26)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.clicked.connect(fn); return btn
+
+    def apply_palette(self) -> None:
+        bg = P["bg"]; text = P["text"]; muted = P["muted"]
+        btn_bg = P["btn_bg"]; btn_fg = P["btn_fg"]
+        btn_hover = P["btn_hover"]; btn_border = P["btn_border"]
+        self.setStyleSheet(f"""
+            QMainWindow, QWidget {{ background: {bg}; }}
+            QLabel {{ color: {text}; background: transparent; }}
+            QPushButton {{
+                background: {btn_bg}; color: {btn_fg};
+                border: 1px solid {btn_border}; border-radius: 6px;
+                padding: 3px 10px; font-size: 12px;
+            }}
+            QPushButton:hover {{ background: {btn_hover}; }}
+        """)
+        font_title = QFont(); font_title.setPointSize(16); font_title.setBold(True)
+        self.title_label.setFont(font_title)
+        self.title_label.setStyleSheet(f"color: {text};")
+
+        font_sub = QFont(); font_sub.setPointSize(10)
+        self.subtitle_label.setFont(font_sub)
+        self.subtitle_label.setStyleSheet(f"color: {muted};")
+
+        font_footer = QFont(); font_footer.setPointSize(7)
+        self.footer_lbl.setFont(font_footer)
+        self.footer_lbl.setStyleSheet(f"color: {muted};")
+
+    def closeEvent(self, event) -> None:
+        event.ignore()
+        self.hide()
+
+# ── 앱 컨트롤러 ─────────────────────────────────────────
+class WorkTimerApp:
+    def __init__(self, start_minimized: bool = False) -> None:
+        self.log = WorkLog.load()
+        _recovered = ActivityTracker.recover_from_checkpoint(self.log)
+        self._settings = load_settings()
+        self._lang_name = self._settings.get("lang", "한국어")
+        self.L = LANGUAGES.get(self._lang_name, LANG_KO)
+        self._theme = self._settings.get("theme", "light")
+        self._icon_idx: int = int(self._settings.get("icon_idx", 0))
+        self._custom_icons: list[str] = self._settings.get("custom_icons", [])
+        self._clock_bg_path: str = self._settings.get("clock_bg_path", "")
+        self._clock_bg_pixmap: QPixmap | None = None
+        if self._clock_bg_path and Path(self._clock_bg_path).exists():
+            self._clock_bg_pixmap = QPixmap(self._clock_bg_path)
+        if self._theme == "dark":
+            P.update(PALETTE_DARK)
+
+        for skey, pkey in [("color_active", "active"), ("color_clock_bg", "clock"), ("color_center", "center")]:
+            val = self._settings.get(skey, "")
+            if val and val.startswith("#") and len(val) == 7:
+                P[pkey] = val
+
+        today = date.today()
+        self.year = today.year
+        self.month = today.month
+        self.view = "month"
+        self.year_year = today.year
+        self.detail_day: date | None = None
+        self._redraw_pending = False
+
+        self.tracker = ActivityTracker(self.log, self.schedule_redraw, recovered_start=_recovered)
+
+        self.main_window = MainWindow(self)
+        icon = load_icon_any(self._icon_idx, self._custom_icons)
+        self.main_window.setWindowIcon(icon)
+        QApplication.instance().setWindowIcon(icon)
+
+        self._tray = self._build_tray(icon)
+        self._poll_timer = QTimer()
+        self._poll_timer.timeout.connect(self.tracker._tick)
+        self._poll_timer.start(POLL_SECONDS * 1000)
+
+        self.redraw()
+        if not start_minimized:
+            self.main_window.show()
+
+    def _build_tray(self, icon: QIcon) -> "QSystemTrayIcon | None":
+        from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return None
+        tray = QSystemTrayIcon()
+        tray.setIcon(icon)
+        tray.setToolTip(APP_NAME)
+        menu = QMenu()
+        menu.addAction("열기", self.show_window)
+        menu.addSeparator()
+        menu.addAction("종료", self.quit)
+        tray.setContextMenu(menu)
+        tray.activated.connect(lambda reason:
+            self.show_window() if reason == QSystemTrayIcon.ActivationReason.DoubleClick else None)
+        tray.show()
+        return tray
+
+    def show_window(self) -> None:
+        self.main_window.show()
+        self.main_window.raise_()
+        self.main_window.activateWindow()
+
+    def quit(self) -> None:
+        self.tracker.stop()
+        if self._tray: self._tray.hide()
+        QApplication.quit()
+
+    # ── 뷰 전환 ─────────────────────────────────────
+    def open_day(self, d: date) -> None:
+        self.detail_day = d
+        self.view = "day"
+        self.redraw()
+
+    def close_day(self) -> None:
+        self.view = "month"
+        self.detail_day = None
+        self.redraw()
+
+    def title_click(self) -> None:
+        if self.view == "day":
+            self.close_day()
+        else:
+            today = date.today()
+            self.year = today.year; self.month = today.month
             self.redraw()
 
-        def _cancel(evt=None):
-            self._range_sel_start = None
-            self._range_sel_end = None
-            self._range_entry_winid = None
-            self.redraw()
+    def toggle_year(self) -> None:
+        if self.view in ("year", "multi_year"):
+            self.view = "month"
+        else:
+            self.year_year = self.year
+            self.view = "year"
+        self.redraw()
 
-        entry.bind("<Return>", _save)
-        entry.bind("<Escape>", _cancel)
-        # No FocusOut — it causes spurious saves during Korean IME composition
+    def toggle_expand(self) -> None:
+        if self.view == "multi_month":
+            self.view = "month"
+        elif self.view == "month":
+            self.view = "multi_month"
+        elif self.view == "year":
+            self.view = "multi_year"
+        elif self.view == "multi_year":
+            self.view = "year"
+        self.redraw()
 
-    def _draw_range_overlay(self) -> None:
-        """Draw stored range labels + current drag selection onto the calendar canvas."""
-        # Draw stored ranges for this month
-        for r in self.log.ranges_for_month(self.year, self.month):
-            self._draw_range_band(r["start_date"], r["end_date"], r["label"],
-                                   "#bfdbfe", "#2563eb")
+    def prev_month(self) -> None:
+        if self.view in ("year", "multi_year"):
+            self.year_year -= 1
+        elif self.view == "day":
+            if self.detail_day:
+                self.detail_day -= timedelta(days=1)
+        else:
+            if self.month == 1: self.year -= 1; self.month = 12
+            else: self.month -= 1
+        self.redraw()
 
-        # Draw in-progress drag selection
-        if self._cal_drag_mode and self._cal_press_day and self._cal_drag_end:
-            lo = min(self._cal_press_day, self._cal_drag_end)
-            hi = max(self._cal_press_day, self._cal_drag_end)
-            self._draw_range_band(lo, hi, "", "#e0f2fe", "#0284c7", preview=True)
+    def next_month(self) -> None:
+        if self.view in ("year", "multi_year"):
+            self.year_year += 1
+        elif self.view == "day":
+            if self.detail_day:
+                self.detail_day += timedelta(days=1)
+        else:
+            if self.month == 12: self.year += 1; self.month = 1
+            else: self.month += 1
+        self.redraw()
 
-        # Draw confirmed selection (while showing input)
-        if self._range_sel_start and self._range_sel_end:
-            self._draw_range_band(self._range_sel_start, self._range_sel_end,
-                                   "", "#bfdbfe", "#2563eb", preview=True)
+    def open_settings(self) -> None:
+        SettingsDialog(self, self.main_window).exec()
 
-    def _draw_range_band(self, start: date, end: date, label: str,
-                          fill: str, color: str, preview: bool = False) -> None:
-        cells = [(x1, y1, x2, y2, d) for x1, y1, x2, y2, d in self._day_hitboxes
-                 if start <= d <= end]
-        if not cells:
-            return
-        rows: dict[float, list] = {}
-        for c in cells:
-            rows.setdefault(c[1], []).append(c)
-        first_row_y = min(rows.keys())
-        inset = 3
-        for ry, rcells in sorted(rows.items()):
-            rcells.sort(key=lambda c: c[0])
-            x1r = rcells[0][0] + inset
-            y1r = rcells[0][1] + inset
-            x2r = rcells[-1][2] - inset
-            y2r = rcells[-1][3] - inset
-            # Transparent fill: only the border is drawn so cell content remains visible
-            self.canvas.create_rectangle(x1r, y1r, x2r, y2r,
-                                          fill="", outline=color,
-                                          width=3 if not preview else 2)
-            # Draw label text in the first row only
-            if label and ry == first_row_y:
-                mid_x = (x1r + x2r) / 2
-                mid_y = (y1r + y2r) / 2
-                self.canvas.create_text(mid_x, mid_y, text=label, fill=color,
-                                         font=("Malgun Gothic", 8, "bold"))
-                # Remove (✕) handle — small label at top-right of band
-                def _rm(evt=None, s=start, e=end):
-                    self.log.remove_range(s, e)
-                    self.redraw()
-                tag = f"range_{start}_{end}"
-                self.canvas.create_text(x2r - 6, y1r + 8, text="✕", fill=color,
-                                         font=("Malgun Gothic", 7), tags=(tag,))
-                self.canvas.tag_bind(tag, "<Button-1>", _rm)
+    def open_export(self) -> None:
+        ExportDialog(self, self.main_window).exec()
 
-    # ── 리드로우 ──────────────────────────────────────
+    # ── 리드로우 ─────────────────────────────────────
     def schedule_redraw(self) -> None:
-        if self._redraw_pending:
-            return
+        if self._redraw_pending: return
         self._redraw_pending = True
-        self.root.after(300, self._scheduled_redraw)
+        QTimer.singleShot(300, self._do_redraw)
 
-    def _scheduled_redraw(self) -> None:
+    def _do_redraw(self) -> None:
         self._redraw_pending = False
         self.redraw()
 
     def redraw(self) -> None:
-        try:
-            if self.view == "year":
-                self._draw_year()
-            elif self.view == "day":
-                self._draw_day_detail_view()
-            elif self.view == "expand":
-                self._draw_expand()
+        L = self.L
+        mw = self.main_window
+
+        def _month_title(yr: int, mo: int) -> str:
+            mo_names = L.get("month_names")
+            if mo_names:
+                return f"{mo_names[mo - 1]} {yr}"
+            return f"{yr}{L['year']} {mo}{L['month_unit']}"
+
+        if self.view in ("month", "multi_month"):
+            mw.title_label.setText(_month_title(self.year, self.month))
+            month_total = sum(
+                self.log.total_seconds_for(date(self.year, self.month, d))
+                for d in range(1, calendar.monthrange(self.year, self.month)[1] + 1)
+            )
+            mw.subtitle_label.setText(f"{L['total_month']}  {seconds_to_hhmm(month_total)}")
+            mw.btn_expand.setText(L["collapse_btn"] if self.view == "multi_month" else L["expand_btn"])
+
+        elif self.view == "day" and self.detail_day:
+            d = self.detail_day
+            mo_names = L.get("month_names")
+            if mo_names:
+                day_title = f"{mo_names[d.month - 1]} {d.day}, {d.year}"
             else:
-                self._draw_calendar()
-        except TclError:
-            pass
-
-    # ── 표시 인터벌 (실시간 포함) ──────────────────────
-    def _get_display_intervals(self, day: date) -> list[list[int]]:
-        intervals = list(self.log.intervals_for(day))
-        if day == date.today():
-            ci = self.tracker.current_interval
-            if ci and ci[1] > ci[0]:
-                for d_key, s, e in split_interval_by_day(ci[0], ci[1]):
-                    if d_key == date_key(day) and e > s:
-                        intervals = merge_intervals(intervals + [[s, e]])
-        # Defensive clamp: never allow arcs beyond [0, 86400]
-        return [[max(0, s), min(86400, e)] for s, e in intervals if e > s]
-
-    def _get_display_total(self, day: date) -> int:
-        return sum(max(0, e - s) for s, e in self._get_display_intervals(day))
-
-    # ── 월간 뷰 ───────────────────────────────────────
-    def _draw_calendar(self) -> None:
-        self._clear_embedded_widgets()
-        self.canvas.delete("all")
-        self._day_hitboxes = []
-        self._detail_back_hitbox = None
-        width = max(900, self.canvas.winfo_width())
-        height = max(560, self.canvas.winfo_height())
-        L = self._L
-
-        month_name = f"{self.year}{L['year']} {self.month}{L['month_unit']}"
-        self.title_label.configure(text=month_name)
-
-        month_days = calendar.monthrange(self.year, self.month)[1]
-        total = sum(self._get_display_total(date(self.year, self.month, d))
-                    for d in range(1, month_days + 1))
-        self.summary_label.configure(text=f"{L['total_month']}  {seconds_to_hhmm(total)}")
-
-        col_count = 7
-        header_h = 34
-        gap = 6
-        cell_w = (width - gap * (col_count - 1)) / col_count
-        weeks = calendar.Calendar(firstweekday=6).monthdatescalendar(self.year, self.month)
-        row_count = len(weeks)
-        cell_h = (height - header_h - gap * (row_count - 1)) / row_count
-
-        bold = tkfont.Font(family="Malgun Gothic", size=10, weight="bold")
-        small = tkfont.Font(family="Malgun Gothic", size=8)
-        today = date.today()
-
-        for col, label in enumerate(L["weekdays"]):
-            x = col * (cell_w + gap)
-            self.canvas.create_text(x + cell_w / 2, 15, text=label,
-                                     fill=PALETTE["muted"], font=bold)
-
-        for row, week in enumerate(weeks):
-            for col, day in enumerate(week):
-                x = col * (cell_w + gap)
-                y = header_h + row * (cell_h + gap)
-                self._day_hitboxes.append((x, y, x + cell_w, y + cell_h, day))
-                is_cur = day.month == self.month
-                fill = PALETTE["panel"] if is_cur else (PALETTE["bg"])
-                outline = PALETTE["today"] if day == today else PALETTE["line"]
-                self.canvas.create_rectangle(x, y, x + cell_w, y + cell_h,
-                                              fill=fill, outline=outline,
-                                              width=2 if day == today else 1)
-                self.canvas.create_text(x + 8, y + 8, text=str(day.day), anchor="nw",
-                                         fill=PALETTE["text"] if is_cur else PALETTE["muted"],
-                                         font=bold)
-                intervals = self._get_display_intervals(day)
-                total_s = sum(max(0, e - s) for s, e in intervals)  # 동일 스냅샷 재사용
-                radius = max(24, min(cell_w * 0.32, cell_h * 0.28))
-                cx, cy = x + cell_w / 2, y + cell_h / 2 - 4
-                alpha = PALETTE["clock"] if is_cur else "#e5e7eb"
-                self._draw_clock(cx, cy, radius, intervals, alpha)
-                self.canvas.create_text(x + cell_w / 2, y + cell_h - 14,
-                                         text=seconds_to_hhmm(total_s),
-                                         fill=PALETTE["active_dark"] if total_s else PALETTE["muted"],
-                                         font=small)
-
-        # Range labels overlay (drawn last so they appear on top)
-        self._draw_range_overlay()
-
-    # ── 펼치기 뷰 (3개월) ────────────────────────────
-    def _draw_expand(self) -> None:
-        self._clear_embedded_widgets()
-        self.canvas.delete("all")
-        self._day_hitboxes = []
-        self._year_month_hitboxes = []
-        self._detail_back_hitbox = None
-
-        width = max(1800, self.canvas.winfo_width())
-        height = max(560, self.canvas.winfo_height())
-        L = self._L
-
-        # 3개월: 이전/현재/다음
-        months = []
-        for delta in (-1, 0, 1):
-            m = self.month + delta
-            y = self.year
-            if m < 1:
-                m += 12; y -= 1
-            elif m > 12:
-                m -= 12; y += 1
-            months.append((y, m))
-
-        col_w = width / 3
-        gap = 8
-        bold = tkfont.Font(family="Malgun Gothic", size=9, weight="bold")
-        small = tkfont.Font(family="Malgun Gothic", size=7)
-        today = date.today()
-        is_center = [False, True, False]
-
-        for col_i, (yr, mo) in enumerate(months):
-            x_off = col_i * col_w
-            mo_name = f"{yr}{L['year']} {mo}{L['month_unit']}"
-
-            # 월 헤더
-            self.canvas.create_text(x_off + col_w / 2, 14, text=mo_name,
-                                     fill=PALETTE["text"] if is_center[col_i] else PALETTE["muted"],
-                                     font=bold)
-            # 구분선
-            if col_i > 0:
-                self.canvas.create_line(x_off, 0, x_off, height,
-                                         fill=PALETTE["line"], width=1)
-
-            # 요일 헤더
-            header_h = 32
-            n_cols = 7
-            cw = (col_w - gap) / n_cols
-            for c, wd in enumerate(L["weekdays"]):
-                self.canvas.create_text(x_off + c * cw + cw / 2, 24,
-                                         text=wd, fill=PALETTE["muted"], font=small)
-
-            # 날짜 셀
-            weeks = calendar.Calendar(firstweekday=6).monthdatescalendar(yr, mo)
-            row_count = len(weeks)
-            ch = (height - header_h - gap * (row_count - 1)) / row_count
-            radius = max(16, min(cw * 0.30, ch * 0.26))
-
-            for row, week in enumerate(weeks):
-                for c, day in enumerate(week):
-                    cx2 = x_off + c * cw
-                    cy2 = header_h + row * (ch + gap)
-                    self._day_hitboxes.append((cx2, cy2, cx2 + cw, cy2 + ch, day))
-                    is_cur = day.month == mo
-                    fill = PALETTE["panel"] if is_cur else "#f3f4f6" if self._theme == "light" else "#0f172a"
-                    outline = PALETTE["today"] if day == today else PALETTE["line"]
-                    self.canvas.create_rectangle(cx2, cy2, cx2 + cw, cy2 + ch,
-                                                  fill=fill, outline=outline,
-                                                  width=2 if day == today else 1)
-                    self.canvas.create_text(cx2 + 4, cy2 + 4, text=str(day.day), anchor="nw",
-                                             fill=PALETTE["text"] if is_cur else PALETTE["muted"],
-                                             font=small)
-                    intervals = self._get_display_intervals(day)
-                    total_s = sum(max(0, e - s) for s, e in intervals)  # 동일 스냅샷 재사용
-                    self._draw_clock(cx2 + cw / 2, cy2 + ch / 2 - 2, radius, intervals,
-                                      PALETTE["clock"] if is_cur else (
-                                          "#e5e7eb" if self._theme == "light" else "#1e293b"))
-                    self.canvas.create_text(cx2 + cw / 2, cy2 + ch - 10,
-                                             text=seconds_to_hhmm(total_s),
-                                             fill=PALETTE["active_dark"] if total_s else PALETTE["muted"],
-                                             font=small)
-
-        # Title bar update
-        self.title_label.configure(
-            text=f"{months[1][0]}{L['year']} {months[1][1]}{L['month_unit']}")
-        total3 = sum(
-            self._get_display_total(date(yr, mo, d))
-            for yr, mo in months
-            for d in range(1, calendar.monthrange(yr, mo)[1] + 1)
-        )
-        self.summary_label.configure(text=f"3개월 총  {seconds_to_hhmm(total3)}")
-
-    # ── 일간 뷰 ───────────────────────────────────────
-    def _draw_day_detail_view(self) -> None:
-        self._clear_embedded_widgets()
-        self.canvas.delete("all")
-        self._detail_back_hitbox = None
-        self._day_hitboxes = []
-
-        if self.detail_day is None:
-            return
-
-        day = self.detail_day
-        L = self._L
-        width = max(900, self.canvas.winfo_width())
-        height = max(560, self.canvas.winfo_height())
-
-        wd = L["weekday_names"][day.weekday()]
-        self.title_label.configure(
-            text=f"{day.year}{L['year']} {day.month}{L['month_unit']} {day.day}{L['day_unit']}")
-        total_s = self._get_display_total(day)
-        self.summary_label.configure(
-            text=f"{L['total_day']}  {seconds_to_hhmm(total_s)}")
-
-        # 날짜 헤더 (뒤로가기는 헤더 제목 클릭으로 대체)
-        self._detail_back_hitbox = None
-        pad = 24
-
-        # 시계 (좌측 중앙)
-        right_panel_w = 260
-        clock_area_w = width - right_panel_w - pad * 2
-        radius = min(clock_area_w / 2, (height - 120) / 2) * 0.82
-        cx = pad + clock_area_w / 2
-        cy = height / 2
-        intervals = self._get_display_intervals(day)
-        self._day_clock_cx = cx
-        self._day_clock_cy = cy
-        self._day_clock_r = radius
-        self._day_intervals = list(intervals)
-        merge_gaps = [(g[0], g[1]) for g in self.log.merges_for(day)]
-        hi = ([self._drag_interval_idx, self._drag_target_idx]
-              if self._merge_drag_active else [])
-        self._draw_clock(cx, cy, radius, intervals, PALETTE["clock"],
-                          merge_gaps=merge_gaps, highlight_idxs=hi, min_secs=0)
-        self._draw_hour_labels(cx, cy, radius)
-
-        # 우측 패널 (기록 구간 + 메모)
-        panel_x = width - right_panel_w - pad
-        live = (day == date.today())
-        day_header = f"{day.year}-{day.month:02d}-{day.day:02d}  {wd}"
-        self._draw_right_panel(panel_x, pad + 10, right_panel_w, height - pad - 10,
-                                intervals, day, total_s=total_s, live=live,
-                                day_header=day_header)
-
-    def _draw_right_panel(self, x: float, y: float, w: float, h: float,
-                           intervals: list[list[int]], day: date,
-                           total_s: int = 0, live: bool = False,
-                           day_header: str = "") -> None:
-        L = self._L
-
-        panel = Frame(self.canvas, bg=PALETTE["bg"])
-        self._embedded_widgets.append(panel)
-        self.canvas.create_window(x, y, window=panel, anchor="nw", width=w)
-
-        bold = ("Malgun Gothic", 10, "bold")
-        small = ("Malgun Gothic", 9)
-        tiny = ("Malgun Gothic", 8)
-
-        # ── 날짜 헤더 ──────────────────────────────────
-        if day_header:
-            Label(panel, text=day_header, bg=PALETTE["bg"], fg=PALETTE["text"],
-                  font=("Malgun Gothic", 9)).pack(anchor="w", pady=(0, 4))
-
-        # ── 총 작업시간 ────────────────────────────────
-        Label(panel, text=f"{L['total']}  {seconds_to_hhmm(total_s)}",
-              bg=PALETTE["bg"], fg=PALETTE["muted"],
-              font=("Malgun Gothic", 10)).pack(anchor="w")
-        Frame(panel, bg=PALETTE["line"], height=1).pack(fill=X, pady=(6, 8))
-
-        # ── 기록 구간 ─────────────────────────────────
-        Label(panel, text=L["intervals"], bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=bold).pack(anchor="w", pady=(0, 4))
-
-        if not intervals:
-            Label(panel, text=L["no_record"], bg=PALETTE["bg"], fg=PALETTE["muted"],
-                  font=small).pack(anchor="w")
-        else:
-            groups = self._group_intervals_with_merges(day, intervals)
-            total_groups = len(groups)
-            count = 0
-            for g_idx, group in enumerate(groups):
-                if count >= 10:
-                    Label(panel, text=f"외 {len(intervals) - 10}개",
-                          bg=PALETTE["bg"], fg=PALETTE["muted"], font=small).pack(anchor="w")
-                    break
-                is_last = (g_idx == total_groups - 1)
-                if group["merged"]:
-                    s = group["intervals"][0][0]
-                    e = group["intervals"][-1][1]
-                    blk = Frame(panel, bg="#dbeafe")
-                    blk.pack(fill=X, pady=2, padx=2)
-                    Label(blk, text=f"{seconds_to_hhmm(s)} – {seconds_to_hhmm(e)}",
-                          bg="#dbeafe", fg=PALETTE["text"],
-                          font=small).pack(side=LEFT, padx=(6, 0), pady=3)
-                    if live and is_last:
-                        Label(blk, text="지금 기록중", bg="#dbeafe",
-                              fg="#60a5fa", font=tiny).pack(side=LEFT, padx=(6, 0), pady=3)
-                    gaps_copy = list(group["gaps"])
-                    def make_unmerge(d=day, gaps=gaps_copy):
-                        def _fn():
-                            for gs, ge in gaps:
-                                self.log.remove_merge(d, gs, ge)
-                            self.redraw()
-                        return _fn
-                    lbl_x = Label(blk, text="✕", bg="#dbeafe", fg=PALETTE["muted"],
-                                  font=("Malgun Gothic", 8), cursor="hand2", padx=4)
-                    lbl_x.pack(side=RIGHT, pady=3)
-                    lbl_x.bind("<Button-1>", lambda _e, fn=make_unmerge(): fn())
-                else:
-                    s, e = group["intervals"][0]
-                    row_f = Frame(panel, bg=PALETTE["bg"])
-                    row_f.pack(fill=X, pady=1)
-                    Label(row_f, text=f"{seconds_to_hhmm(s)} – {seconds_to_hhmm(e)}",
-                          bg=PALETTE["bg"], fg=PALETTE["muted"],
-                          font=small).pack(side=LEFT)
-                    if live and is_last:
-                        Label(row_f, text="지금 기록중", bg=PALETTE["bg"],
-                              fg="#60a5fa", font=tiny).pack(side=LEFT, padx=(6, 0))
-                count += 1
-
-        # ── 구분선 ─────────────────────────────────────
-        Frame(panel, bg=PALETTE["line"], height=1).pack(fill=X, pady=(10, 6))
-
-        # ── 메모 ──────────────────────────────────────
-        Label(panel, text=L["memo"], bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=bold).pack(anchor="w", pady=(0, 4))
-
-        txt = Text(panel, width=28, height=5, bg=PALETTE["panel"], fg=PALETTE["text"],
-                   relief="flat", bd=0, font=small, wrap="word",
-                   highlightthickness=1, highlightbackground="#d1d9e0",
-                   highlightcolor="#93c5fd", undo=False, padx=6, pady=6)
-        txt.insert("1.0", self.log.note_for(day))
-        txt.pack(fill=X)
-
-        def save_note() -> None:
-            self.log.set_note_for(day, txt.get("1.0", END))
-
-        btn_f = Frame(panel, bg=PALETTE["bg"])
-        btn_f.pack(anchor="e", pady=(6, 0))
-        RoundedButton(btn_f, L["memo_save"], save_note, width=60, height=26).pack()
-
-    # ── 연간 뷰 (히트맵) ──────────────────────────────
-    def _draw_year(self) -> None:
-        self._clear_embedded_widgets()
-        self.canvas.delete("all")
-        self._year_month_hitboxes = []
-        self._day_hitboxes = []
-        self._detail_back_hitbox = None
-
-        L = self._L
-        yr = self.year_year
-        self.title_label.configure(text=f"{yr}{L['year']}")
-
-        annual = sum(self.log.total_seconds_for(date(yr, m, d))
-                     for m in range(1, 13)
-                     for d in range(1, calendar.monthrange(yr, m)[1] + 1))
-        self.summary_label.configure(text=f"{seconds_to_hhmm(annual)}")
-
-        width = max(900, self.canvas.winfo_width())
-        height = max(560, self.canvas.winfo_height())
-
-        cols, rows_mo = 4, 3
-        gap = 10
-        cell_w = (width - gap * (cols + 1)) / cols
-        cell_h = (height - gap * (rows_mo + 1)) / rows_mo
-
-        bold = tkfont.Font(family="Malgun Gothic", size=9, weight="bold")
-        small = tkfont.Font(family="Malgun Gothic", size=7)
-        today = date.today()
-
-        # 히트맵 색상 (작업량 0→낮음→중→높음)
-        HEAT = ["#f1f5f9", "#bfdbfe", "#60a5fa", "#2563eb", "#1e3a8a"]
-
-        def heat_color(sec: int) -> str:
-            if sec == 0:     return HEAT[0]
-            if sec < 3600:   return HEAT[1]
-            if sec < 14400:  return HEAT[2]
-            if sec < 28800:  return HEAT[3]
-            return HEAT[4]
-
-        for i, mo in enumerate(range(1, 13)):
-            col = i % cols
-            row = i // cols
-            x = gap + col * (cell_w + gap)
-            y = gap + row * (cell_h + gap)
-
-            self._year_month_hitboxes.append((x, y, x + cell_w, y + cell_h, yr, mo))
-
-            is_cur = (yr == today.year and mo == today.month)
-            self.canvas.create_rectangle(x, y, x + cell_w, y + cell_h,
-                                          fill=PALETTE["panel"],
-                                          outline="#fde68a" if is_cur else PALETTE["line"],
-                                          width=2 if is_cur else 1)
-
-            mo_total = sum(self.log.total_seconds_for(date(yr, mo, d))
-                           for d in range(1, calendar.monthrange(yr, mo)[1] + 1))
-            self.canvas.create_text(x + 10, y + 13,
-                                     text=f"{mo}{L['month_unit']}",
-                                     anchor="w", fill=PALETTE["text"], font=bold)
-            self.canvas.create_text(x + cell_w - 8, y + 13,
-                                     text=seconds_to_hhmm(mo_total),
-                                     anchor="e",
-                                     fill=PALETTE["active_dark"] if mo_total else PALETTE["muted"],
-                                     font=small)
-
-            # 히트맵 점 그리기
-            weeks = calendar.Calendar(firstweekday=6).monthdatescalendar(yr, mo)
-            n_weeks = len(weeks)
-            pad_x, pad_y = 8, 30
-            avail_w = cell_w - pad_x * 2
-            avail_h = cell_h - pad_y - 6
-            dot_w = avail_w / 7
-            dot_h = avail_h / n_weeks
-            dot_r = min(dot_w, dot_h) * 0.38
-
-            for r_i, week in enumerate(weeks):
-                for c_i, day in enumerate(week):
-                    if day.month != mo:
-                        continue
-                    sec = self.log.total_seconds_for(day)
-                    if day == today and self.tracker.current_interval:
-                        sec += self._get_display_total(day) - self.log.total_seconds_for(day)
-                    color = heat_color(sec)
-                    dx = x + pad_x + c_i * dot_w + dot_w / 2
-                    dy = y + pad_y + r_i * dot_h + dot_h / 2
-                    self.canvas.create_oval(dx - dot_r, dy - dot_r,
-                                             dx + dot_r, dy + dot_r,
-                                             fill=color, outline="")
-
-    # ── 시계 그리기 ───────────────────────────────────
-    def _draw_clock(self, cx, cy, radius, intervals, fill,
-                    merge_gaps=None, highlight_idxs=None, min_secs=120) -> None:
-        l, t, r, b = cx-radius, cy-radius, cx+radius, cy+radius
-        self.canvas.create_oval(l, t, r, b, fill=fill, outline=PALETTE["clock_line"])
-
-        hi_set = set(highlight_idxs) if highlight_idxs else set()
-
-        # Regular (non-highlighted) intervals
-        for i, (s, e) in enumerate(intervals):
-            if i in hi_set:
-                continue
-            dur = e - s
-            if dur < 120:
-                if min_secs > 0:
-                    continue  # 소형 클럭에서는 생략
-                # 대형 클럭(일간): 라인으로 표시
-                mid = (s + e) / 2
-                angle = math.radians(90 - (mid / 86400) * 360)
-                self.canvas.create_line(
-                    cx + math.cos(angle) * radius * 0.1,
-                    cy - math.sin(angle) * radius * 0.1,
-                    cx + math.cos(angle) * radius * 0.97,
-                    cy - math.sin(angle) * radius * 0.97,
-                    fill=PALETTE["active"], width=2)
-                continue
-            sd = 90 - (s / 86400) * 360
-            ex = -((e - s) / 86400) * 360
-            self.canvas.create_arc(l, t, r, b, start=sd, extent=ex,
-                                    style="pieslice", fill=PALETTE["active"],
-                                    outline=PALETTE["active"])
-
-        # Merged gap bridges (same color → seamless)
-        if merge_gaps:
-            for gs, ge in merge_gaps:
-                sd = 90 - (gs / 86400) * 360
-                ex = -((ge - gs) / 86400) * 360
-                self.canvas.create_arc(l, t, r, b, start=sd, extent=ex,
-                                        style="pieslice", fill=PALETTE["active"],
-                                        outline=PALETTE["active"])
-
-        # Highlighted intervals (drag preview)
-        for i in hi_set:
-            if i < len(intervals):
-                s, e = intervals[i]
-                sd = 90 - (s / 86400) * 360
-                ex = -((e - s) / 86400) * 360
-                self.canvas.create_arc(l, t, r, b, start=sd, extent=ex,
-                                        style="pieslice", fill="#818cf8",
-                                        outline="#818cf8")
-
-        # Preview bridge between the two highlighted intervals
-        if len(hi_set) == 2 and intervals:
-            a_idx, b_idx = sorted(hi_set)
-            if b_idx < len(intervals) and b_idx == a_idx + 1:
-                e1 = intervals[a_idx][1]
-                s2 = intervals[b_idx][0]
-                if e1 < s2:
-                    sd = 90 - (e1 / 86400) * 360
-                    ex = -((s2 - e1) / 86400) * 360
-                    self.canvas.create_arc(l, t, r, b, start=sd, extent=ex,
-                                            style="pieslice", fill="#c7d2fe",
-                                            outline="#818cf8")
-
-        self.canvas.create_oval(l, t, r, b, outline=PALETTE["clock_line"])
-        for hour in (0, 6, 12, 18):
-            angle = math.radians(90 - (hour / 24) * 360)
-            x1 = cx + math.cos(angle) * radius * 0.82
-            y1 = cy - math.sin(angle) * radius * 0.82
-            x2 = cx + math.cos(angle) * radius * 0.96
-            y2 = cy - math.sin(angle) * radius * 0.96
-            self.canvas.create_line(x1, y1, x2, y2, fill="#7dd3fc")
-        self.canvas.create_oval(cx-3, cy-3, cx+3, cy+3, fill=PALETTE["center"], outline="")
-
-    def _draw_hour_labels(self, cx, cy, radius) -> None:
-        for hour in range(0, 24, 3):
-            angle = math.radians(90 - (hour / 24) * 360)
-            tx = cx + math.cos(angle) * radius * 1.14
-            ty = cy - math.sin(angle) * radius * 1.14
-            self.canvas.create_text(tx, ty, text=f"{hour:02d}",
-                                     fill=PALETTE["muted"],
-                                     font=("Malgun Gothic", 9, "bold"))
-
-    def _clear_embedded_widgets(self) -> None:
-        for w in self._embedded_widgets:
-            try:
-                w.destroy()
-            except TclError:
-                pass
-        self._embedded_widgets = []
-
-    # ── 내보내기 ──────────────────────────────────────
-    def open_export(self) -> None:
-        L = self._L
-        win = tk.Toplevel(self.root)
-        win.title(L["export_title"])
-        win.configure(bg=PALETTE["bg"])
-        win.resizable(False, False)
-        win.grab_set()
-
-        pad = 20
-        Label(win, text=L["export_format"], bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=("Malgun Gothic", 10, "bold")).pack(padx=pad, pady=(pad, 8), anchor="w")
-
-        fmt_var = StringVar(value=L["fmt_simple"])
-        for fmt in [L["fmt_simple"], L["fmt_table"], L["fmt_detail"]]:
-            tk.Radiobutton(win, text=fmt, variable=fmt_var, value=fmt,
-                           bg=PALETTE["bg"], fg=PALETTE["text"],
-                           activebackground=PALETTE["bg"],
-                           font=("Malgun Gothic", 9)).pack(padx=pad+8, anchor="w")
-
-        # ── 날짜 범위 필터 ─────────────────────────────
-        Frame(win, bg=PALETTE["line"], height=1).pack(fill=X, padx=pad, pady=(12, 6))
-        rf = Frame(win, bg=PALETTE["bg"])
-        rf.pack(padx=pad, anchor="w", pady=(0, 4))
-        Label(rf, text=L.get("export_range", "기간"), bg=PALETTE["bg"],
-              fg=PALETTE["text"], font=("Malgun Gothic", 9, "bold")).pack(side=LEFT, padx=(0, 8))
-        all_days = sorted(self.log.days.keys())
-        first_day = all_days[0] if all_days else date.today().isoformat()
-        last_day  = all_days[-1] if all_days else date.today().isoformat()
-        from_var = StringVar(value=first_day)
-        to_var   = StringVar(value=last_day)
-        Label(rf, text="from", bg=PALETTE["bg"], fg=PALETTE["muted"],
-              font=("Malgun Gothic", 8)).pack(side=LEFT)
-        tk.Entry(rf, textvariable=from_var, width=11, font=("Malgun Gothic", 9),
-                 relief="flat", highlightthickness=1,
-                 highlightbackground=PALETTE["btn_border"]).pack(side=LEFT, padx=(2, 4))
-        Label(rf, text="→", bg=PALETTE["bg"], fg=PALETTE["muted"],
-              font=("Malgun Gothic", 8)).pack(side=LEFT)
-        tk.Entry(rf, textvariable=to_var, width=11, font=("Malgun Gothic", 9),
-                 relief="flat", highlightthickness=1,
-                 highlightbackground=PALETTE["btn_border"]).pack(side=LEFT, padx=(2, 0))
-
-        bf = Frame(win, bg=PALETTE["bg"])
-        bf.pack(padx=pad, pady=pad)
-        RoundedButton(bf, L["export"],
-                      lambda: self._do_export(fmt_var.get(), win, from_var.get(), to_var.get()),
-                      width=100, height=30, dark=True).pack(side=LEFT, padx=4)
-        RoundedButton(bf, "✕", win.destroy, width=40, height=30).pack(side=LEFT)
-
-    def _do_export(self, fmt_label: str, win: tk.Toplevel,
-                   from_str: str = "", to_str: str = "") -> None:
-        L = self._L
-        path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("텍스트 파일", "*.txt")],
-            initialfile=f"WorkTimer_{date.today().isoformat()}.txt",
-            title=L["export_title"],
-            parent=win,
-        )
-        if not path:
-            return
-
-        try:
-            from_date = date.fromisoformat(from_str) if from_str else None
-            to_date   = date.fromisoformat(to_str)   if to_str   else None
-        except ValueError:
-            from_date = to_date = None
-
-        all_days_raw = sorted(self.log.days.keys())
-        all_days = [k for k in all_days_raw if
-                    (from_date is None or date.fromisoformat(k) >= from_date) and
-                    (to_date   is None or date.fromisoformat(k) <= to_date)]
-        lines: list[str] = [
-            L["export_header"],
-            f"{L['export_time']} {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            L["made_by"], "",
-        ]
-
-        if fmt_label == L["fmt_table"]:
-            hd = L
-            lines.append(f"| {hd['table_date']} | {hd['table_wd']} | {hd['table_time']} | {hd['table_note']} |")
-            lines.append("|------|------|----------|------|")
-            for key in all_days:
-                d = date.fromisoformat(key)
-                wd = L["weekdays"][d.weekday()]
-                t = seconds_to_hhmm(self.log.total_seconds_for(d))
-                note = self.log.note_for(d) or "-"
-                lines.append(f"| {key} | {wd} | {t} | {note} |")
-
-        elif fmt_label == L["fmt_detail"]:
-            for key in all_days:
-                d = date.fromisoformat(key)
-                wd = L["weekdays"][d.weekday()]
-                t = seconds_to_hhmm(self.log.total_seconds_for(d))
-                lines.append(f"## {key} ({wd})  {t}")
-                for s, e in self.log.intervals_for(d):
-                    lines.append(f"  {seconds_to_hhmm(s)} – {seconds_to_hhmm(e)}")
-                note = self.log.note_for(d)
-                if note:
-                    lines.append(f"  📝 {note}")
-                lines.append("")
-
-        else:
-            if not all_days:
-                lines.append(L["no_data"])
-            for key in all_days:
-                d = date.fromisoformat(key)
-                wd = L["weekdays"][d.weekday()]
-                t = seconds_to_hhmm(self.log.total_seconds_for(d))
-                note = self.log.note_for(d)
-                line = f"{key} ({wd})  {t}"
-                if note:
-                    line += f"  | {note}"
-                lines.append(line)
-
-        # Append range labels that overlap the exported period
-        relevant_ranges = [
-            r for r in self.log.ranges
-            if (from_date is None or date.fromisoformat(r.get("end", "9999")) >= from_date) and
-               (to_date   is None or date.fromisoformat(r.get("start", "0000")) <= to_date)
-        ]
-        if relevant_ranges:
-            lines += ["", "── 구간 메모 ──"]
-            for r in sorted(relevant_ranges, key=lambda x: x.get("start", "")):
-                lines.append(f"  {r['start']} ~ {r['end']}  {r.get('label', '')}")
-
-        try:
-            Path(path).write_text("\n".join(lines), encoding="utf-8")
-            win.destroy()
-            messagebox.showinfo(L["export_done"], L["export_saved"].format(path))
-        except Exception as exc:
-            messagebox.showerror(L["export_err"], str(exc))
-
-    # ── 설정 ──────────────────────────────────────────
-    def open_settings(self) -> None:
-        L = self._L
-        win = tk.Toplevel(self.root)
-        win.title(L["settings_title"])
-        win.configure(bg=PALETTE["bg"])
-        win.resizable(False, False)
-        win.grab_set()
-
-        pad = 20
-        row = 0
-
-        Label(win, text=L["lang_label"], bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=("Malgun Gothic", 10, "bold")).grid(row=row, column=0, padx=pad, pady=(pad, 4), sticky="w")
-        lang_var = StringVar(value=self._lang_name)
-        ttk.Combobox(win, textvariable=lang_var, values=list(LANGUAGES.keys()),
-                     state="readonly", width=12).grid(row=row, column=1, padx=pad, pady=(pad, 4), sticky="w")
-        row += 1
-
-        Label(win, text=L["autostart"], bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=("Malgun Gothic", 9)).grid(row=row, column=0, padx=pad, pady=4, sticky="w")
-        autostart_var = tk.BooleanVar(value=get_autostart())
-        tk.Checkbutton(win, variable=autostart_var, bg=PALETTE["bg"],
-                       activebackground=PALETTE["bg"]).grid(row=row, column=1, padx=pad, pady=4, sticky="w")
-        row += 1
-
-        Label(win, text=L["icon_label"], bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=("Malgun Gothic", 9)).grid(row=row, column=0, padx=pad, pady=4, sticky="w")
-        RoundedButton(win, L["icon_pick_btn"], lambda: (win.destroy(), self.open_icon_picker()),
-                      width=80, height=26).grid(row=row, column=1, padx=pad, pady=4, sticky="w")
-        row += 1
-
-        Label(win, text=L["data_path"], bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=("Malgun Gothic", 9)).grid(row=row, column=0, padx=pad, pady=4, sticky="w")
-        RoundedButton(win, "📁", lambda: os.startfile(DATA_DIR), width=36, height=26
-                      ).grid(row=row, column=1, padx=pad, pady=4, sticky="w")
-        row += 1
-
-        Label(win, text=L["reset_btn"], bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=("Malgun Gothic", 9)).grid(row=row, column=0, padx=pad, pady=4, sticky="w")
-        RoundedButton(win, "🗑", self._reset_data, width=36, height=26
-                      ).grid(row=row, column=1, padx=pad, pady=4, sticky="w")
-        row += 1
-
-        # ── 색상 설정 ─────────────────────────────────
-        Frame(win, bg=PALETTE["line"], height=1).grid(
-            row=row, column=0, columnspan=2, padx=pad, pady=(8, 4), sticky="ew")
-        row += 1
-        Label(win, text=L.get("color_section", "색상 설정"), bg=PALETTE["bg"],
-              fg=PALETTE["text"], font=("Malgun Gothic", 10, "bold")).grid(
-            row=row, column=0, columnspan=2, padx=pad, pady=(0, 4), sticky="w")
-        row += 1
-
-        color_entries: dict[str, tuple[StringVar, Canvas]] = {}
-        color_defs = [
-            ("color_active", "active",    L.get("color_active",   "활동 구간 색상")),
-            ("color_clock_bg", "clock",   L.get("color_clock_bg", "시계 배경 색상")),
-            ("color_center",  "center",   L.get("color_center",   "중앙점 색상")),
-        ]
-        for skey, pkey, clabel in color_defs:
-            Label(win, text=clabel, bg=PALETTE["bg"], fg=PALETTE["text"],
-                  font=("Malgun Gothic", 9)).grid(row=row, column=0, padx=pad, pady=2, sticky="w")
-            cf = Frame(win, bg=PALETTE["bg"])
-            cf.grid(row=row, column=1, padx=pad, pady=2, sticky="w")
-            cur = self._settings.get(skey, PALETTE[pkey])
-            cv = StringVar(value=cur)
-            swatch = Canvas(cf, width=18, height=18, highlightthickness=1,
-                            highlightbackground=PALETTE["btn_border"],
-                            bg=cur, cursor="hand2")
-            swatch.pack(side=LEFT, padx=(0, 4))
-            ent = tk.Entry(cf, textvariable=cv, width=9, font=("Malgun Gothic", 9),
-                           relief="flat", highlightthickness=1,
-                           highlightbackground=PALETTE["btn_border"])
-            ent.pack(side=LEFT)
-            color_entries[skey] = (cv, swatch)
-
-            def _pick(sv=cv, sw=swatch):
-                res = colorchooser.askcolor(color=sv.get(), title="색상 선택", parent=win)
-                if res and res[1]:
-                    sv.set(res[1])
-                    try:
-                        sw.configure(bg=res[1])
-                    except Exception:
-                        pass
-
-            def _trace(_, __, ___, sv=cv, sw=swatch):
-                v = sv.get()
-                if len(v) == 7 and v.startswith("#"):
-                    try:
-                        sw.configure(bg=v)
-                    except Exception:
-                        pass
-
-            swatch.bind("<Button-1>", lambda _e, fn=_pick: fn())
-            cv.trace_add("write", _trace)
-            row += 1
-
-        # 색상 초기화 버튼
-        def _reset_colors():
-            base = PALETTE_DARK if self._theme == "dark" else PALETTE_LIGHT
-            for skey, pkey, _ in color_defs:
-                color_entries[skey][0].set(base[pkey])
-                color_entries[skey][1].configure(bg=base[pkey])
-                if skey in self._settings:
-                    del self._settings[skey]
-
-        RoundedButton(win, L.get("color_reset", "기본값 초기화"), _reset_colors,
-                      width=120, height=24).grid(row=row, column=0, columnspan=2,
-                                                  padx=pad, pady=(0, 4), sticky="w")
-        row += 1
-
-        # ── 테마 ──────────────────────────────────────
-        Frame(win, bg=PALETTE["line"], height=1).grid(
-            row=row, column=0, columnspan=2, padx=pad, pady=(8, 4), sticky="ew")
-        row += 1
-        Label(win, text=L.get("theme_label", "테마"), bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=("Malgun Gothic", 9, "bold")).grid(row=row, column=0, padx=pad, pady=4, sticky="w")
-        theme_var = StringVar(value=self._theme)
-        tf = Frame(win, bg=PALETTE["bg"])
-        tf.grid(row=row, column=1, padx=pad, pady=4, sticky="w")
-        for tv, tl in [("light", L.get("theme_light", "라이트")),
-                        ("dark",  L.get("theme_dark",  "다크"))]:
-            tk.Radiobutton(tf, text=tl, variable=theme_var, value=tv,
-                           bg=PALETTE["bg"], fg=PALETTE["text"],
-                           activebackground=PALETTE["bg"],
-                           font=("Malgun Gothic", 9)).pack(side=LEFT, padx=(0, 8))
-        row += 1
-
-        def apply() -> None:
-            set_autostart(autostart_var.get())
-            self._settings["lang"] = lang_var.get()
-            self._settings["icon_style"] = self._icon_style
-            # Colors
-            for skey, pkey, _ in color_defs:
-                val = color_entries[skey][0].get().strip()
-                if len(val) == 7 and val.startswith("#"):
-                    self._settings[skey] = val
-                    PALETTE[pkey] = val
-            # Theme
-            new_theme = theme_var.get()
-            theme_changed = new_theme != self._theme
-            self._theme = new_theme
-            self._settings["theme"] = new_theme
-            base = PALETTE_DARK if new_theme == "dark" else PALETTE_LIGHT
-            PALETTE.update(base)
-            # Re-apply saved color overrides on top of theme
-            for skey, pkey, _ in color_defs:
-                val = self._settings.get(skey, "")
-                if len(val) == 7 and val.startswith("#"):
-                    PALETTE[pkey] = val
-            save_settings(self._settings)
-            self._lang_name = lang_var.get()
-            win.destroy()
-            if theme_changed:
-                self._apply_theme()
+                day_title = f"{d.year}{L['year']} {d.month}{L['month_unit']} {d.day}{L['day_unit']}"
+            mw.title_label.setText(day_title)
+            mw.subtitle_label.setText("")
+            mw.btn_expand.setText(L["expand_btn"])
+
+            # 우측 패널 업데이트 (paintEvent 외부에서 호출)
+            today = date.today()
+            intervals = self.log.intervals_for(d)
+            live = (d == today and self.tracker.current_interval is not None)
+            if live:
+                ci = self.tracker.current_interval
+                display_ivs = merge_intervals(intervals + [[seconds_from_midnight(ci[0]), seconds_from_midnight(ci[1])]])
             else:
-                self._apply_lang()
-                self.redraw()
+                display_ivs = list(intervals)
+            total_s = sum(e - s for s, e in display_ivs)
+            merges = self.log.merges_for(d)
+            wd = L["weekday_names"][d.weekday()]
+            day_header = f"{d.year}-{d.month:02d}-{d.day:02d}  {wd}"
+            note = self.log.note_for(d)
+            mw.canvas.refresh_day_panel(d, intervals, merges, total_s, live, day_header, note)
 
-        Frame(win, bg=PALETTE["bg"]).grid(row=row, column=0, columnspan=2, pady=8)
-        row += 1
-        RoundedButton(win, "✓ 적용" if self._lang_name == "한국어" else "✓ Apply",
-                      apply, width=80, height=28, dark=True
-                      ).grid(row=row, column=0, columnspan=2, pady=(0, pad))
+        elif self.view == "year":
+            mw.title_label.setText(str(self.year_year))
+            mw.subtitle_label.setText("")
+            mw.btn_expand.setText(L["expand_btn"])
 
-    def _reset_data(self) -> None:
-        L = self._L
-        if messagebox.askyesno(L["reset_title"], L["reset_confirm"]):
-            self.log.reset()
-            self.redraw()
-            messagebox.showinfo(L["reset_title"], L["reset_done"])
+        elif self.view == "multi_year":
+            yr = self.year_year
+            mw.title_label.setText(f"{yr - 1} – {yr + 1}")
+            mw.subtitle_label.setText("")
+            mw.btn_expand.setText(L["collapse_btn"])
 
-    # ── 트레이 ────────────────────────────────────────
-    def run(self) -> None:
-        self.tracker.start()
-        self._start_tray()
-        if self._start_minimized:
-            self.root.withdraw()
-        self.redraw()
-        self.root.mainloop()
+        # 헤더 버튼 텍스트 언어 동기화
+        mw.btn_year.setText(L["year_view"])
+        mw.btn_settings.setText(L["settings"])
+        mw.btn_export.setText(L["export"])
 
-    def quit(self) -> None:
-        self.tracker.stop()
-        if self._tray_icon:
-            self._tray_icon.stop()
-        self.root.destroy()
+        mw.canvas.update()
 
-    def hide_window(self) -> None:
-        self.root.withdraw()
+# ── 진입점 ──────────────────────────────────────────────
+def main() -> None:
+    mutex = ctypes.windll.kernel32.CreateMutexW(None, True, MUTEX_NAME)
+    if ctypes.windll.kernel32.GetLastError() == 183:
+        return
 
-    def show_window(self) -> None:
-        self.root.after(0, self._show_window)
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Utobit.WorkTimer")
+    except Exception:
+        pass
 
-    def _show_window(self) -> None:
-        self.root.deiconify()
-        self.root.lift()
-        self.root.focus_force()
-        self.redraw()
+    app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
 
-    def _set_window_icon(self) -> None:
-        def _do():
-            if self._icon_style:
-                img = self._load_icon_pil(self._icon_style, 32)
-                if img and ImageTk is not None:
-                    try:
-                        self._tk_icon = ImageTk.PhotoImage(img)
-                        self.root.iconphoto(True, self._tk_icon)
-                        return
-                    except Exception:
-                        pass
-            if ICON_FILE.exists():
-                try:
-                    self._tk_icon = PhotoImage(file=str(ICON_FILE))
-                    self.root.iconphoto(True, self._tk_icon)
-                except Exception:
-                    self._tk_icon = None
-        _do()
-        self.root.after(400, _do)  # 윈도우가 완전히 뜬 뒤 한 번 더 보장
+    font = QFont("Malgun Gothic", 10)
+    font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    app.setFont(font)
 
-    def _load_icon_pil(self, icon_name: str, size: int = 64):
-        if Image is None:
-            return None
-        path = ICONS_DIR / icon_name
-        if not path.exists():
-            return None
-        try:
-            return Image.open(path).convert("RGBA").resize((size, size))
-        except Exception:
-            return None
-
-    def _apply_icon(self, icon_name: str, save: bool = True) -> None:
-        self._icon_style = icon_name
-        if save:
-            self._settings["icon_style"] = icon_name
-            self._settings["lang"] = self._lang_name
-            save_settings(self._settings)
-
-        img = self._load_icon_pil(icon_name, 64)
-        if img is None:
-            return
-        self._pil_icon = img
-
-        if ImageTk is not None:
-            try:
-                self._tk_icon = ImageTk.PhotoImage(img.resize((32, 32)))
-                self.root.iconphoto(True, self._tk_icon)
-            except Exception:
-                pass
-
-        if self._tray_icon is not None:
-            try:
-                self._tray_icon.icon = img
-            except Exception:
-                pass
-
-    def open_icon_picker(self) -> None:
-        L = self._L
-        icon_files = get_icon_files()
-
-        win = tk.Toplevel(self.root)
-        win.title(L["icon_picker_title"])
-        win.configure(bg=PALETTE["bg"])
-        win.resizable(False, False)
-        win.grab_set()
-
-        Label(win, text=L["icon_picker_title"], bg=PALETTE["bg"], fg=PALETTE["text"],
-              font=("Malgun Gothic", 12, "bold")).pack(pady=(18, 4))
-        Label(win, text=L["icon_picker_desc"], bg=PALETTE["bg"], fg=PALETTE["muted"],
-              font=("Malgun Gothic", 9)).pack(pady=(0, 14))
-
-        preview_frame = Frame(win, bg=PALETTE["bg"])
-        preview_frame.pack(padx=20, pady=(0, 10))
-
-        sel_var = StringVar(value=self._icon_style if self._icon_style else "")
-        # 미리보기 이미지 참조 보관 (GC 방지)
-        self._picker_refs: list = []
-
-        THUMB = 64
-        if not icon_files:
-            Label(preview_frame, text="icons/ 폴더에 PNG 파일이 없습니다.",
-                  bg=PALETTE["bg"], fg=PALETTE["muted"],
-                  font=("Malgun Gothic", 9)).pack()
-        else:
-            for i, path in enumerate(icon_files):
-                col_frame = Frame(preview_frame, bg=PALETTE["bg"])
-                col_frame.grid(row=0, column=i, padx=8)
-
-                # PIL 썸네일
-                tk_img = None
-                if Image is not None and ImageTk is not None:
-                    try:
-                        pil_img = Image.open(path).convert("RGBA").resize((THUMB, THUMB))
-                        tk_img = ImageTk.PhotoImage(pil_img)
-                        self._picker_refs.append(tk_img)
-                    except Exception:
-                        pass
-
-                if tk_img:
-                    lbl = Label(col_frame, image=tk_img, bg=PALETTE["bg"],
-                                cursor="hand2", relief="flat")
-                    lbl.pack()
-                    lbl.bind("<Button-1>", lambda _e, n=path.name: sel_var.set(n))
-                else:
-                    # PIL 없을 때 tkinter PhotoImage 폴백
-                    try:
-                        tk_img2 = PhotoImage(file=str(path))
-                        self._picker_refs.append(tk_img2)
-                        Label(col_frame, image=tk_img2, bg=PALETTE["bg"]).pack()
-                    except Exception:
-                        Label(col_frame, text="[?]", bg=PALETTE["bg"],
-                              width=6, height=3).pack()
-
-                tk.Radiobutton(col_frame, text=path.stem, variable=sel_var,
-                               value=path.name, bg=PALETTE["bg"], fg=PALETTE["text"],
-                               activebackground=PALETTE["bg"],
-                               font=("Malgun Gothic", 8)).pack()
-
-        def confirm() -> None:
-            chosen = sel_var.get()
-            if chosen:
-                self._apply_icon(chosen, save=True)
-            win.destroy()
-
-        Frame(win, bg=PALETTE["bg"]).pack(pady=6)
-        RoundedButton(win, "✓ 선택" if self._lang_name == "한국어" else "✓ Select",
-                      confirm, width=90, height=30, dark=True).pack(pady=(0, 18))
-
-    def _start_tray(self) -> None:
-        if pystray is None or Image is None:
-            return
-        image = self._make_tray_image()
-        menu = pystray.Menu(
-            pystray.MenuItem("열기", lambda _i, _it: self.show_window(), default=True),
-            pystray.MenuItem("숨기기", lambda _i, _it: self.root.after(0, self.hide_window)),
-            pystray.MenuItem("종료", lambda _i, _it: self.root.after(0, self.quit)),
-        )
-        self._tray_icon = pystray.Icon(APP_NAME, image, APP_NAME, menu)
-        threading.Thread(target=self._tray_icon.run, name="worktimer-tray", daemon=True).start()
-
-    def _make_tray_image(self):
-        if Image is None:
-            return None
-        if self._icon_style:
-            img = self._load_icon_pil(self._icon_style, 64)
-            if img:
-                return img
-        if ICON_FILE.exists():
-            try:
-                return Image.open(ICON_FILE).convert("RGBA").resize((64, 64))
-            except Exception:
-                pass
-        # 폴백: 생성 아이콘
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        draw.ellipse((4, 4, 60, 60), fill=(224,242,254,255), outline=(2,132,199,255), width=3)
-        draw.pieslice((4, 4, 60, 60), start=270, end=20, fill=(253,186,116,255))
-        draw.line((32, 32, 32, 14), fill=(31,41,55,255), width=3)
-        draw.line((32, 32, 46, 38), fill=(31,41,55,255), width=3)
-        draw.ellipse((29, 29, 35, 35), fill=(31,41,55,255))
-        return img
-
-
-_SINGLE_INSTANCE_MUTEX = None
-
-def main() -> int:
-    if os.name != "nt":
-        print("WorkTimer currently supports Windows only.")
-        return 1
-    # 중복 실행 방지 — Named Mutex
-    global _SINGLE_INSTANCE_MUTEX
-    _SINGLE_INSTANCE_MUTEX = ctypes.windll.kernel32.CreateMutexW(None, True, "UtobitWorkTimer_SingleInstance")
-    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        return 0
-    start_minimized = "--minimized" in sys.argv or "--tray" in sys.argv
-    app = WorkTimerApp(start_minimized=start_minimized)
-    app.run()
-    return 0
-
+    start_minimized = "--minimized" in sys.argv
+    wt = WorkTimerApp(start_minimized=start_minimized)
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
