@@ -4,8 +4,9 @@ PC 작업 시간을 자동으로 기록하는 Windows 트레이 앱.
 키보드·마우스 입력 감지 → 24시간 원형 시계 + 월간 캘린더로 시각화.
 
 **제작**: Jin (AI Agent) · Utobit  
+**버전**: 1.0.1  
 **라이선스**: MIT  
-**다운로드**: [U Store](https://utobit.net/da/ustore/) · [GitHub Releases](../../releases)
+**Microsoft Store**: [PC_WorkTimer](https://apps.microsoft.com/detail/9N6RFQF96ZTD)
 
 ---
 
@@ -16,12 +17,14 @@ PC 작업 시간을 자동으로 기록하는 Windows 트레이 앱.
 | 자동 기록 | 입력 감지 시 즉시 시작, 10분 무입력 시 자동 종료 |
 | 월간 캘린더 | 7열 × 날짜별 원형 시계 히트맵 |
 | 일간 상세 | 24시간 대형 시계 + 기록 구간 목록 |
-| 연간 히트맵 | 1년 전체 작업량 색상 표시 |
-| 펼치기 뷰 | 3개월 동시 보기 |
-| 구간 병합 | 인접 구간 드래그 → 하나로 합치기 |
+| 연간 히트맵 | 1년 전체 작업량 색상 표시 (펼치기 시 3개년) |
+| 3개월 뷰 | 펼치기/접기로 전환 |
+| 구간 병합 | 인접 구간 클릭 → 하나로 합치기 |
 | 메모 | 날짜별 메모 저장 |
-| 다크모드 | 라이트/다크 테마 전환 |
-| 기록 내보내기 | CSV 내보내기 |
+| 다크/라이트 모드 | 테마 전환 |
+| 기록 내보내기 | 텍스트 파일 내보내기 (Notion 등 바로 붙여넣기) |
+| 커스텀 아이콘 | 트레이·시계 아이콘 교체 |
+| 시계 배경 이미지 | 커스텀 이미지 설정 |
 | 체크포인트 | 강제 종료 시 60초 단위 자동 복구 |
 
 ---
@@ -36,8 +39,7 @@ X.Y.Z.W
 └─────── 메이저
 ```
 
-배포 버전 마지막 자리 = 0 (예: `1.0.2.0`)  
-테스트 중 = `1.0.2.1`, `1.0.2.2`... → 완료 시 `1.0.3.0` 릴리즈
+배포 버전 마지막 자리 = 0 (예: `1.0.2.0`)
 
 ---
 
@@ -57,15 +59,14 @@ X.Y.Z.W
 
 ```
 Python 3.12
-tkinter (내장)
-Pillow, pystray
+PyQt6
 PyInstaller 6.x
 Windows SDK 10.0.22621 (makeappx, signtool)
 ```
 
 설치:
 ```powershell
-pip install -r requirements.txt
+pip install PyQt6
 python worktimer.py
 ```
 
@@ -82,51 +83,41 @@ pyinstaller WorkTimer.spec --noconfirm
 ### 2. MSIX 패키징 + 서명
 ```powershell
 .\build_msix.ps1
-# 결과물: dist/WorkTimer.msix (자체 서명)
+# 결과물: dist/WorkTimer.msix
+# Microsoft Store 제출용: MSStore/WorkTimer.msix
 ```
 
-서명 인증서: `dist/WorkTimer_cert.pfx` (비밀번호: 별도 관리)  
-Publisher: `CN=4BF7C5DE-0E2A-457D-A549-A5D4AF5B008E`
-
-### 3. 설치 (로컬 테스트)
+### 3. 로컬 테스트 설치
 ```powershell
-# 구버전 제거 후 설치 (버전 다운그레이드 시 필수)
-Get-AppxPackage -Name "UtobitWorkTimer" | Remove-AppxPackage
+Get-AppxPackage -Name "utobit.PCWorkTimer" | Remove-AppxPackage
 Add-AppxPackage -Path dist\WorkTimer.msix
 
 # 실행
-Start-Process "shell:AppsFolder\UtobitWorkTimer_z949ye19fere4!WorkTimer"
+Start-Process "shell:AppsFolder\utobit.PCWorkTimer_z949ye19fere4!WorkTimer"
 ```
+
+> 재실행 시 반드시 기존 프로세스 먼저 종료 (mutex 때문):
+> ```powershell
+> taskkill /F /IM pythonw.exe; taskkill /F /IM WorkTimer.exe
+> ```
 
 ---
 
 ## 코드 구조
 
 ```
-worktimer.py          ← 단일 파일 (~2200줄)
+worktimer.py          ← 단일 파일 (~1900줄)
 ├── PALETTE_LIGHT/DARK     팔레트 상수
+├── LANG_KO / LANG_EN      다국어 문자열
 ├── WorkLog                JSON 로그 저장/로드
 ├── ActivityTracker        백그라운드 입력 감지 스레드
-│   ├── _tick()            5초마다 실행, 아이들 판정
-│   ├── _write_checkpoint()60초마다 active_start 저장
-│   └── recover_from_checkpoint()  재시작 시 복구
-└── WorkTimerApp           tkinter 메인 앱
-    ├── _build_header()    헤더 (< 제목 >, 2×2 버튼 그리드)
-    ├── _draw_calendar()   월간 뷰
-    ├── _draw_day_detail_view()  일간 뷰
-    ├── _draw_clock()      24시간 원형 시계 (min_secs 파라미터)
-    ├── _draw_right_panel()      날짜·총시간·구간·메모
-    ├── _draw_expand()     3개월 펼치기 뷰
-    └── _draw_year()       연간 히트맵
+└── WorkTimerApp           PyQt6 메인 앱
+    ├── CalendarWidget     월간/다중월 캘린더
+    ├── ClockWidget        24시간 원형 시계
+    ├── RightPanel         기록 구간·메모·총시간
+    ├── YearWidget         연간 히트맵
+    └── SettingsDialog     설정창 (아이콘·색상·배경)
 ```
-
-### 핵심 동작
-
-- **아이들 감지**: `get_idle_seconds()` → `IDLE_GRACE_SECONDS=600` 초과 시 구간 종료
-- **자정 경계**: `split_interval_by_day()` 로 날짜별 분리
-- **구간 병합**: `merge_intervals()` — 인접(+1초) 구간 자동 합치기
-- **소형 호 버그**: tkinter arc extent < 0.5°(≈120초) → 전체원으로 렌더링 버그  
-  → 소형 클럭: 120초 미만 스킵 / 대형 클럭(일간): 라디알 라인으로 표시
 
 ---
 
@@ -142,7 +133,12 @@ msix/
     StoreLogo.png
 ```
 
-버전 변경 시: `AppxManifest.xml` + `worktimer.py` `VERSION` 동시 수정
+**Package Identity:**
+- Name: `utobit.PCWorkTimer`
+- Publisher: `CN=4BF7C5DE-0E2A-457D-A549-A5D4AF5B008E`
+- Family: `utobit.PCWorkTimer_z949ye19fere4`
+
+버전 변경 시: `AppxManifest.xml` Version + `worktimer.py` VERSION 동시 수정
 
 ---
 
@@ -153,27 +149,15 @@ msix/
 2. AppxManifest.xml: Version="1.0.X.0"
 3. pyinstaller WorkTimer.spec --noconfirm
 4. .\build_msix.ps1
-5. git add -A && git commit -m "release: WorkTimer v1.0.X"
-6. git tag worktimer-v1.0.X && git push origin main --tags
-7. GitHub Releases 에서 태그 선택 → WorkTimer.msix 업로드
-8. U Store 다운로드 링크 업데이트
+5. Copy-Item dist\WorkTimer.msix MSStore\WorkTimer.msix -Force
+6. git add -A && git commit -m "release: WorkTimer v1.0.X"
+7. git push
+8. Microsoft Store Partner Center에 MSStore\WorkTimer.msix 업로드
 ```
-
----
-
-## Microsoft Store 제출 체크리스트
-
-- [ ] Partner Center 계정 (사업자 등록 필요)
-- [ ] `dist/WorkTimer.msix` (Azure Trusted Signing 적용 필요)
-- [ ] 스크린샷 1280×800 이상 (최소 1장)
-- [ ] 스토어 설명 (한국어/영어)
-- [ ] 개인정보처리방침 URL: `https://utobit.net/privacy/`
-- [ ] 연령 등급: PEGI 3 / Everyone
 
 ---
 
 ## 알려진 제약
 
 - Windows 전용 (`ctypes.windll` 사용)
-- 자체 서명 MSIX → 배포 PC에 인증서 수동 설치 필요 (또는 Azure Trusted Signing)
 - 멀티모니터 DPI 스케일링 미대응
