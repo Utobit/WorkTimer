@@ -174,6 +174,8 @@ LANG_KO = {
     "range_label_prompt": "날짜 묶음 이름 (빈칸이면 취소):",
     "total_label": "총 작업시간",
     "recording_now": "지금 기록중",
+    "color_section": "색상 설정",
+    "ok": "확인",
     "clock_bg_label": "시계 배경 이미지",
     "clock_bg_pick": "선택",
     "clock_bg_clear": "지우기",
@@ -214,6 +216,8 @@ LANG_EN = {
     "range_label_prompt": "Range name (empty to cancel):",
     "total_label": "Total",
     "recording_now": "Recording...",
+    "color_section": "Color Settings",
+    "ok": "OK",
     "clock_bg_label": "Clock Background Image",
     "clock_bg_pick": "Pick",
     "clock_bg_clear": "Clear",
@@ -1544,7 +1548,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(sep2)
 
         # 색상 설정
-        color_lbl = QLabel("색상 설정")
+        color_lbl = QLabel(L["color_section"])
         color_lbl.setStyleSheet(f"color: {P['muted']}; font-size: 11px;")
         layout.addWidget(color_lbl)
 
@@ -1592,7 +1596,7 @@ class SettingsDialog(QDialog):
         reset_data_btn.clicked.connect(self._reset_data)
         layout.addWidget(reset_data_btn)
 
-        ok_btn = QPushButton("확인")
+        ok_btn = QPushButton(L["ok"])
         ok_btn.setStyleSheet(f"background: {P['btn_dark']}; color: #fff; border: none; border-radius: 6px; padding: 8px;")
         ok_btn.clicked.connect(lambda: self._save(lang_cb, theme_cb, idle_spin, autostart_cb))
         layout.addWidget(ok_btn)
