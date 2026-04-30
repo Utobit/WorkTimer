@@ -6,13 +6,13 @@
   IgnorableNamespaces="uap rescap">
 
   <Identity
-    Name="UtobitWorkTimer"
+    Name="utobit.PCWorkTimer"
     Publisher="CN=4BF7C5DE-0E2A-457D-A549-A5D4AF5B008E"
     Version="1.0.1.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
-    <DisplayName>WorkTimer</DisplayName>
+    <DisplayName>PC WorkTimer</DisplayName>
     <PublisherDisplayName>Utobit</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
