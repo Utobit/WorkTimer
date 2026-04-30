@@ -5,7 +5,7 @@ a = Analysis(
     ['worktimer.py'],
     pathex=[],
     binaries=[],
-    datas=[('icon.png', '.'), ('icons', 'icons')],
+    datas=[('icons', 'icons')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -32,7 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon.ico'],
+    icon=['icons\\icon_1.png'],
 )
 coll = COLLECT(
     exe,
