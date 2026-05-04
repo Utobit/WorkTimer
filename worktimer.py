@@ -29,7 +29,7 @@ from PyQt6.QtGui import (
 
 # ── 상수 ────────────────────────────────────────────────
 APP_NAME      = "WorkTimer"
-VERSION       = "1.0.1"
+VERSION       = "1.0.1.2"
 IDLE_GRACE_SECONDS = 10 * 60
 POLL_SECONDS  = 5
 APP_DIR       = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
@@ -76,8 +76,9 @@ ICON_FILES = ["icon_1.png", "icon_2.png", "icon_3.png", "icon_4.ico", "icon_5.pn
 ICON_NAMES = ["그린", "블루", "핑크", "클래식", "캐릭터"]
 
 _icon_search = [
-    RESOURCE_DIR / "icons",
-    Path(__file__).resolve().parent / "icons",
+    RESOURCE_DIR / "icons",              # one-file 빌드: sys._MEIPASS/icons
+    APP_DIR / "_internal" / "icons",     # one-folder 빌드: exe_dir/_internal/icons
+    Path(__file__).resolve().parent / "icons",  # 개발 모드
 ]
 ICONS_DIR: Path | None = next((p for p in _icon_search if p.exists()), None)
 
@@ -317,6 +318,15 @@ def get_autostart() -> bool:
     except (FileNotFoundError, OSError):
         return False
 
+def apply_autostart_default() -> None:
+    """최초 실행 시 시작 프로그램을 기본으로 활성화."""
+    flag = DATA_DIR / "autostart_default_applied"
+    if flag.exists():
+        return
+    flag.touch()
+    if not get_autostart():
+        set_autostart(True)
+
 # ── 데이터 ──────────────────────────────────────────────
 def prepare_data_storage() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -485,10 +495,21 @@ class ActivityTracker:
         try:
             data = json.loads(CHECKPOINT_FILE.read_text(encoding="utf-8"))
             active_start = datetime.fromisoformat(data.get("active_start", ""))
-            today = now_local().date()
+            now = now_local()
+            today = now.date()
             if active_start.date() < today:
                 log.add_interval(active_start, datetime.combine(today, dt_time.min))
                 return None
+            # 체크포인트 파일의 수정시각 기준으로 마지막 활동 추정
+            # 파일이 IDLE_GRACE 이상 오래됐으면 그 시각까지만 커밋하고 복구 안 함
+            try:
+                import os as _os
+                mtime = datetime.fromtimestamp(_os.path.getmtime(CHECKPOINT_FILE)).replace(microsecond=0)
+                if (now - mtime).total_seconds() > IDLE_GRACE_SECONDS:
+                    log.add_interval(active_start, mtime)
+                    return None
+            except Exception:
+                pass
             return active_start
         except Exception: return None
         finally:
@@ -517,7 +538,7 @@ class ActivityTracker:
             elif self._active_start.date() < current.date():
                 midnight = datetime.combine(current.date(), dt_time.min)
                 self.log.add_interval(self._active_start, midnight)
-                self._active_start = current
+                self._active_start = midnight
                 self._clear_checkpoint()
             if (self._last_checkpoint_write is None or
                     (current - self._last_checkpoint_write).total_seconds() >= 60):
@@ -580,7 +601,8 @@ class RightPanel(QScrollArea):
         """)
 
     def populate(self, day: date, intervals: list[list[int]], merges: list[list[int]],
-                 total_s: int, live: bool, day_header: str, note: str, L: dict) -> None:
+                 total_s: int, live: bool, day_header: str, note: str, L: dict,
+                 live_iv: "tuple[int,int] | None" = None) -> None:
         self._current_day = day
 
         # clear
@@ -633,12 +655,14 @@ class RightPanel(QScrollArea):
         self._layout.addWidget(lbl(L["intervals"], bold=True, size=15, top=10, bottom=6))
 
         groups = self._group_intervals(day, intervals, merges)
+        # 현재 세션이 저장된 마지막 구간과 겹치는지 판단
+        last_stored_end = groups[-1]["intervals"][-1][1] if groups else -1
+        live_is_separate = live and live_iv is not None and live_iv[0] > last_stored_end
+
         if not groups:
             self._layout.addWidget(lbl(f"  {L['no_record']}", color=P["muted"], size=12))
         else:
-            last_idx = len(groups) - 1
-            for gi, g in enumerate(groups):
-                is_last = (gi == last_idx)
+            for g in groups:
                 if g["merged"]:
                     s = g["intervals"][0][0]; e = g["intervals"][-1][1]
                     row = QFrame()
@@ -648,10 +672,6 @@ class RightPanel(QScrollArea):
                     tl = QLabel(f"  {seconds_to_hhmm(s)} – {seconds_to_hhmm(e)}")
                     tl.setStyleSheet(f"color: {P['text']}; font-size: 13px; background: transparent;")
                     rlay.addWidget(tl)
-                    if live and is_last:
-                        ll = QLabel(L["recording_now"])
-                        ll.setStyleSheet("color: #60a5fa; font-size: 11px; background: transparent;")
-                        rlay.addWidget(ll)
                     rlay.addStretch()
                     gaps = list(g["gaps"])
                     xb = QPushButton("✕")
@@ -678,12 +698,24 @@ class RightPanel(QScrollArea):
                     tl = QLabel(f"  {seconds_to_hhmm(s)} – {seconds_to_hhmm(e)}")
                     tl.setStyleSheet(f"color: {P['text']}; font-size: 13px;")
                     rl.addWidget(tl)
-                    if live and is_last:
-                        ll = QLabel(L["recording_now"])
-                        ll.setStyleSheet("color: #60a5fa; font-size: 11px;")
-                        rl.addWidget(ll)
                     rl.addStretch()
                     self._layout.addWidget(row)
+
+        # 현재 기록 구간을 별도 행으로 표시
+        if live and live_iv is not None:
+            ls, le = live_iv
+            live_row = QWidget()
+            live_rl = QHBoxLayout(live_row)
+            live_rl.setContentsMargins(4, 2, 0, 2)
+            live_tl = QLabel(f"  {seconds_to_hhmm(ls)} – {seconds_to_hhmm(le)}")
+            live_tl.setStyleSheet(f"color: {P['text']}; font-size: 13px;")
+            live_rl.addWidget(live_tl)
+            live_ll = QLabel(L["recording_now"])
+            live_ll.setStyleSheet("color: #60a5fa; font-size: 11px;")
+            live_rl.addWidget(live_ll)
+            live_rl.addStretch()
+            self._layout.addWidget(live_row)
+        _ = live_is_separate  # suppress unused warning
 
         self._layout.addWidget(sep(top=16, bottom=8))
 
@@ -789,7 +821,8 @@ class DrawingWidget(QWidget):
         self._app.schedule_redraw()
 
     def refresh_day_panel(self, d: date, intervals: list[list[int]], merges: list[list[int]],
-                          total_s: int, live: bool, day_header: str, note: str) -> None:
+                          total_s: int, live: bool, day_header: str, note: str,
+                          live_iv: "tuple[int,int] | None" = None) -> None:
         # 메모 편집 중이면 재구성 건너뜀
         if (self._right_panel._current_day == d and
                 self._right_panel._memo_edit is not None and
@@ -797,7 +830,7 @@ class DrawingWidget(QWidget):
             return
         self._right_panel._apply_style()
         self._right_panel.populate(d, intervals, merges, total_s, live, day_header, note,
-                                   self._app.L)
+                                   self._app.L, live_iv=live_iv)
 
     # ── 페인트 진입점 ──────────────────────────────────
     def paintEvent(self, event) -> None:
@@ -901,7 +934,8 @@ class DrawingWidget(QWidget):
                 live = (d == today and app.tracker.current_interval is not None)
                 if live:
                     ci = app.tracker.current_interval
-                    display_ivs = merge_intervals(intervals + [[seconds_from_midnight(ci[0]), seconds_from_midnight(ci[1])]])
+                    start_sec = 0 if ci[0].date() < d else seconds_from_midnight(ci[0])
+                    display_ivs = merge_intervals(intervals + [[start_sec, seconds_from_midnight(ci[1])]])
                 else:
                     display_ivs = intervals
                 total_s = sum(e - s for s, e in display_ivs)
@@ -997,7 +1031,8 @@ class DrawingWidget(QWidget):
         live = (d == today and app.tracker.current_interval is not None)
         if live:
             ci = app.tracker.current_interval
-            display_ivs = merge_intervals(intervals + [[seconds_from_midnight(ci[0]), seconds_from_midnight(ci[1])]])
+            start_sec = 0 if ci[0].date() < d else seconds_from_midnight(ci[0])
+            display_ivs = merge_intervals(intervals + [[start_sec, seconds_from_midnight(ci[1])]])
         else:
             display_ivs = list(intervals)
 
@@ -2045,9 +2080,13 @@ class WorkTimerApp:
             today = date.today()
             intervals = self.log.intervals_for(d)
             live = (d == today and self.tracker.current_interval is not None)
+            live_iv = None
             if live:
                 ci = self.tracker.current_interval
-                display_ivs = merge_intervals(intervals + [[seconds_from_midnight(ci[0]), seconds_from_midnight(ci[1])]])
+                start_sec = 0 if ci[0].date() < d else seconds_from_midnight(ci[0])
+                end_sec = seconds_from_midnight(ci[1])
+                live_iv = (start_sec, end_sec)
+                display_ivs = merge_intervals(intervals + [[start_sec, end_sec]])
             else:
                 display_ivs = list(intervals)
             total_s = sum(e - s for s, e in display_ivs)
@@ -2055,7 +2094,7 @@ class WorkTimerApp:
             wd = L["weekday_names"][d.weekday()]
             day_header = f"{d.year}-{d.month:02d}-{d.day:02d}  {wd}"
             note = self.log.note_for(d)
-            mw.canvas.refresh_day_panel(d, intervals, merges, total_s, live, day_header, note)
+            mw.canvas.refresh_day_panel(d, intervals, merges, total_s, live, day_header, note, live_iv=live_iv)
 
         elif self.view == "year":
             mw.title_label.setText(str(self.year_year))
@@ -2093,6 +2132,7 @@ def main() -> None:
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     app.setFont(font)
 
+    apply_autostart_default()
     start_minimized = "--minimized" in sys.argv
     wt = WorkTimerApp(start_minimized=start_minimized)
     sys.exit(app.exec())
