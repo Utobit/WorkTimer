@@ -29,7 +29,7 @@ from PyQt6.QtGui import (
 
 # ── 상수 ────────────────────────────────────────────────
 APP_NAME      = "WorkTimer"
-VERSION       = "1.0.1.2"
+VERSION       = "1.0.2.0"
 IDLE_GRACE_SECONDS = 10 * 60
 POLL_SECONDS  = 5
 APP_DIR       = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
@@ -294,9 +294,13 @@ def save_settings(s: dict) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
 
+def _is_msix() -> bool:
+    """MSIX 패키지 내에서 실행 중인지 감지 (WindowsApps 경로 기준)."""
+    return getattr(sys, "frozen", False) and "\\windowsapps\\" in str(sys.executable).lower()
+
 def set_autostart(enable: bool) -> None:
-    if not getattr(sys, "frozen", False):
-        return
+    if not getattr(sys, "frozen", False) or _is_msix():
+        return  # MSIX는 manifest StartupTask로 관리; 개발 모드는 무시
     exe = f'"{sys.executable}"'
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_SET_VALUE)
@@ -310,6 +314,8 @@ def set_autostart(enable: bool) -> None:
         pass
 
 def get_autostart() -> bool:
+    if _is_msix():
+        return True  # MSIX는 manifest StartupTask가 항상 활성; Task Manager에서 관리
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_READ)
         winreg.QueryValueEx(key, APP_REG_NAME)
@@ -319,13 +325,17 @@ def get_autostart() -> bool:
         return False
 
 def apply_autostart_default() -> None:
-    """최초 실행 시 시작 프로그램을 기본으로 활성화."""
+    """최초 frozen 실행 시 자동 시작 등록; 이미 등록된 경우 EXE 경로를 최신화."""
+    if not getattr(sys, "frozen", False) or _is_msix():
+        return  # 개발 모드 또는 MSIX: 처리 불필요
     flag = DATA_DIR / "autostart_default_applied"
     if flag.exists():
+        # 이미 자동 시작이 등록되어 있으면 경로만 갱신 (업데이트 후 경로 변경 대응)
+        if get_autostart():
+            set_autostart(True)
         return
     flag.touch()
-    if not get_autostart():
-        set_autostart(True)
+    set_autostart(True)
 
 # ── 데이터 ──────────────────────────────────────────────
 def prepare_data_storage() -> None:
@@ -579,6 +589,7 @@ class RightPanel(QScrollArea):
         self._layout.setSpacing(0)
         self._memo_edit: QTextEdit | None = None
         self._current_day: date | None = None
+        self._live_time_label: "QLabel | None" = None
         self._apply_style()
 
     def _apply_style(self) -> None:
@@ -604,6 +615,7 @@ class RightPanel(QScrollArea):
                  total_s: int, live: bool, day_header: str, note: str, L: dict,
                  live_iv: "tuple[int,int] | None" = None) -> None:
         self._current_day = day
+        self._live_time_label = None
 
         # clear
         while self._layout.count():
@@ -710,6 +722,7 @@ class RightPanel(QScrollArea):
             live_tl = QLabel(f"  {seconds_to_hhmm(ls)} – {seconds_to_hhmm(le)}")
             live_tl.setStyleSheet(f"color: {P['text']}; font-size: 13px;")
             live_rl.addWidget(live_tl)
+            self._live_time_label = live_tl
             live_ll = QLabel(L["recording_now"])
             live_ll.setStyleSheet("color: #60a5fa; font-size: 11px;")
             live_rl.addWidget(live_ll)
@@ -823,10 +836,13 @@ class DrawingWidget(QWidget):
     def refresh_day_panel(self, d: date, intervals: list[list[int]], merges: list[list[int]],
                           total_s: int, live: bool, day_header: str, note: str,
                           live_iv: "tuple[int,int] | None" = None) -> None:
-        # 메모 편집 중이면 재구성 건너뜀
+        # 메모 편집 중이면 전체 재구성 건너뜀 — live 시간만 in-place 갱신
         if (self._right_panel._current_day == d and
                 self._right_panel._memo_edit is not None and
                 self._right_panel._memo_edit.hasFocus()):
+            if live and live_iv is not None and self._right_panel._live_time_label is not None:
+                ls, le = live_iv
+                self._right_panel._live_time_label.setText(f"  {seconds_to_hhmm(ls)} – {seconds_to_hhmm(le)}")
             return
         self._right_panel._apply_style()
         self._right_panel.populate(d, intervals, merges, total_s, live, day_header, note,
@@ -862,7 +878,7 @@ class DrawingWidget(QWidget):
         app = self._app; L = app.L
         today = date.today()
 
-        cal = calendar.monthcalendar(year, month)
+        cal = calendar.Calendar(6).monthdayscalendar(year, month)
         rows = len(cal)
         wdays = L["weekdays"]
 
@@ -957,7 +973,7 @@ class DrawingWidget(QWidget):
                 if total_s > 0:
                     font_t = QFont(); font_t.setPointSize(8)
                     painter.setFont(font_t)
-                    painter.setPen(QColor(P["active_dark"] if is_today else P["muted"]))
+                    painter.setPen(QColor(P["muted"]))
                     painter.drawText(QRectF(cx + 2, cy + cell_h - 14, cell_w - 4, 12),
                                      Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
                                      seconds_to_hhmm(total_s))
@@ -1138,7 +1154,7 @@ class DrawingWidget(QWidget):
         painter.setPen(QColor(P["muted"]))
         painter.drawText(QRectF(mx, my, mo_w, 13),
                          Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, mo_lbl)
-        cal = calendar.monthcalendar(yr, mo)
+        cal = calendar.Calendar(6).monthdayscalendar(yr, mo)
         n_weeks = len(cal)
         avail_h = mo_h - 13
         avail_w = mo_w - 2
@@ -1465,7 +1481,12 @@ class SettingsDialog(QDialog):
 
         # 자동 시작
         autostart_cb = QCheckBox(L["autostart"])
-        autostart_cb.setChecked(get_autostart())
+        if _is_msix():
+            autostart_cb.setChecked(True)
+            autostart_cb.setEnabled(False)
+            autostart_cb.setToolTip("MSIX 설치 버전은 Windows 작업 관리자 > 시작 탭에서 관리하세요.")
+        else:
+            autostart_cb.setChecked(get_autostart())
         layout.addWidget(autostart_cb)
 
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
@@ -1643,7 +1664,8 @@ class SettingsDialog(QDialog):
         app.L = LANGUAGES.get(app._lang_name, LANG_KO)
         new_theme = "light" if theme_cb.currentIndex() == 0 else "dark"
         IDLE_GRACE_SECONDS = idle_spin.value() * 60
-        set_autostart(autostart_cb.isChecked())
+        if not _is_msix():
+            set_autostart(autostart_cb.isChecked())
         app._icon_idx = self._icon_idx
 
         if new_theme != app._theme:
@@ -1902,6 +1924,8 @@ class WorkTimerApp:
         self.log = WorkLog.load()
         _recovered = ActivityTracker.recover_from_checkpoint(self.log)
         self._settings = load_settings()
+        global IDLE_GRACE_SECONDS
+        IDLE_GRACE_SECONDS = self._settings.get("idle_grace_minutes", 10) * 60
         self._lang_name = self._settings.get("lang", "한국어")
         self.L = LANGUAGES.get(self._lang_name, LANG_KO)
         self._theme = self._settings.get("theme", "light")

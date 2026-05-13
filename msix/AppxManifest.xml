@@ -3,12 +3,13 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  IgnorableNamespaces="uap rescap desktop">
 
   <Identity
     Name="utobit.PCWorkTimer"
     Publisher="CN=4BF7C5DE-0E2A-457D-A549-A5D4AF5B008E"
-    Version="1.0.1.2"
+    Version="1.0.2.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
@@ -38,6 +39,11 @@
         Square44x44Logo="Assets\Square44x44Logo.png">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
       </uap:VisualElements>
+      <Extensions>
+        <desktop:Extension Category="windows.startupTask" Executable="WorkTimer.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="WorkTimerAutoStart" Enabled="true" DisplayName="WorkTimer" />
+        </desktop:Extension>
+      </Extensions>
     </Application>
   </Applications>
 
